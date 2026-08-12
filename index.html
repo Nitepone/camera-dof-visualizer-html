@@ -98,7 +98,7 @@
   }
   .share-btn { font-size: 12px; padding: 5px 10px; }
   .table-wrap { overflow-x: auto; }
-  .table-actions { margin-top: 12px; }
+  .table-actions { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 
   /* ---- table ---- */
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -303,6 +303,7 @@
     </div>
     <div class="table-actions">
       <button type="button" class="add" id="add-row-btn">+ Add row</button>
+      <button type="button" class="remove" id="reset-rows-btn">Reset to defaults</button>
     </div>
   </section>
 
@@ -537,15 +538,23 @@
   // ---------- state ----------
   let nextId = 1;
   let colorCounter = 0;
-  function defaultRow() {
-    return {
+  function defaultRow(overrides) {
+    return Object.assign({
       id: nextId++,
       colorSlot: colorCounter++,
       sensor: "ff",
       focalLength: 50,
       aperture: 2.8,
       focusDistance: 5,
-    };
+    }, overrides);
+  }
+  const DEFAULT_ROWS = [
+    { sensor: "ff",    focalLength: 50, aperture: 1.8, focusDistance: 5 },
+    { sensor: "apsc",  focalLength: 30, aperture: 1.4, focusDistance: 5 },
+    { sensor: "mf6x6", focalLength: 80, aperture: 2.8, focusDistance: 5 },
+  ];
+  function defaultRows() {
+    return DEFAULT_ROWS.map((cfg) => defaultRow(cfg));
   }
 
   // ---------- row persistence ----------
@@ -605,7 +614,7 @@
       const loaded = rowsFromPlain(JSON.parse(localStorage.getItem(ROWS_KEY)));
       if (loaded) return loaded;
     } catch (e) { /* ignore malformed/unavailable storage */ }
-    return [defaultRow()];
+    return defaultRows();
   }
 
   let rows = initRows();
@@ -718,6 +727,14 @@
     const newRow = defaultRow();
     if (lockFocusDistance) newRow.focusDistance = rows[0].focusDistance;
     rows.push(newRow);
+    saveRows();
+    renderTable();
+    drawChart();
+  });
+
+  document.getElementById("reset-rows-btn").addEventListener("click", () => {
+    if (!confirm("Reset the table to its default rows? This replaces all current rows and can't be undone.")) return;
+    rows = defaultRows();
     saveRows();
     renderTable();
     drawChart();
