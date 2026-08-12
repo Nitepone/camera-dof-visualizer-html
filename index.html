@@ -322,12 +322,18 @@
               <input type="number" id="set-max-dist" step="1" min="0" placeholder="auto">
             </div>
           </div>
-          <div class="field-row">
-            <label for="set-y-scale">Y-axis scale</label>
-            <select id="set-y-scale">
-              <option value="linear">Linear</option>
-              <option value="log">Logarithmic</option>
-            </select>
+          <div class="field-row pair">
+            <div>
+              <label for="set-y-scale">Y-axis scale</label>
+              <select id="set-y-scale">
+                <option value="linear">Linear</option>
+                <option value="log">Logarithmic</option>
+              </select>
+            </div>
+            <div>
+              <label for="set-max-coc">Y-axis max (mm)</label>
+              <input type="number" id="set-max-coc" step="0.01" min="0" placeholder="auto">
+            </div>
           </div>
           <div class="field-row">
             <label class="checkbox-row">
@@ -607,13 +613,14 @@
 
   // ---------- display settings (persisted) ----------
   const SETTINGS_KEY = "dof-explorer-display-settings";
-  let displaySettings = { minDistance: null, maxDistance: null, yScale: "linear", normalize: true };
+  let displaySettings = { minDistance: null, maxDistance: null, maxCoC: null, yScale: "linear", normalize: true };
   (function loadSettings() {
     try {
       const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
       if (saved && typeof saved === "object") {
         if (saved.minDistance === null || typeof saved.minDistance === "number") displaySettings.minDistance = saved.minDistance;
         if (saved.maxDistance === null || typeof saved.maxDistance === "number") displaySettings.maxDistance = saved.maxDistance;
+        if (saved.maxCoC === null || typeof saved.maxCoC === "number") displaySettings.maxCoC = saved.maxCoC;
         if (saved.yScale === "linear" || saved.yScale === "log") displaySettings.yScale = saved.yScale;
         if (typeof saved.normalize === "boolean") displaySettings.normalize = saved.normalize;
       }
@@ -806,10 +813,21 @@
     const { xMin, xMax } = computeDomain();
     const curves = rows.map((row) => ({ row, pts: sampleCurve(row, xMin, xMax, 300) }));
 
-    let yMax = 0;
-    curves.forEach(({ pts }) => pts.forEach((p) => { if (p.y !== null && isFinite(p.y)) yMax = Math.max(yMax, p.y); }));
-    rows.forEach((row) => { yMax = Math.max(yMax, effectiveThreshold(row)); });
-    if (yMax <= 0) yMax = 1;
+    let yMax;
+    if (typeof displaySettings.maxCoC === "number") {
+      yMax = displaySettings.maxCoC;
+    } else {
+      // Auto-scale off the far (background) side only. Blur grows explosively as an
+      // object approaches the lens, and that near-field spike is many times larger
+      // than anything on the background side — including it would flatten the far
+      // side, which is usually the part worth reading, into an unreadable sliver.
+      yMax = 0;
+      curves.forEach(({ row, pts }) => pts.forEach((p) => {
+        if (p.y !== null && isFinite(p.y) && p.x >= row.focusDistance) yMax = Math.max(yMax, p.y);
+      }));
+      rows.forEach((row) => { yMax = Math.max(yMax, effectiveThreshold(row)); });
+      if (yMax <= 0) yMax = 1;
+    }
 
     const isLog = displaySettings.yScale === "log";
     const xTicks = niceTicks(xMin, xMax, 6);
@@ -901,7 +919,13 @@
       ctx.restore();
     });
 
-    // curves
+    // curves — clipped to the plot rect so a curve that shoots past the top (the
+    // near-field spike, or anything above a fixed Y-axis max) is simply cut off
+    // rather than distorting the scale or leaving a gap.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(PAD.left, PAD.top, plotW, plotH);
+    ctx.clip();
     curves.forEach(({ row, pts }) => {
       ctx.strokeStyle = seriesColor(row.colorSlot);
       ctx.lineWidth = 2;
@@ -910,14 +934,15 @@
       ctx.beginPath();
       let started = false;
       pts.forEach((p) => {
-        if (p.y === null || !isFinite(p.y) || p.y > yMaxDomain * 1.2) { started = false; return; }
+        if (p.y === null || !isFinite(p.y)) { started = false; return; }
         const x = xScale(p.x);
-        const y = yScale(Math.min(p.y, yMaxDomain));
+        const y = yScale(p.y);
         if (!started) { ctx.moveTo(x, y); started = true; }
         else ctx.lineTo(x, y);
       });
       ctx.stroke();
     });
+    ctx.restore();
 
     // focus-distance markers on the x-axis
     rows.forEach((row) => {
@@ -1012,12 +1037,14 @@
   const minDistInput = document.getElementById("set-min-dist");
   const maxDistInput = document.getElementById("set-max-dist");
   const yScaleSelect = document.getElementById("set-y-scale");
+  const maxCoCInput = document.getElementById("set-max-coc");
   const normalizeCheckbox = document.getElementById("set-normalize");
 
   function syncPopoverFromSettings() {
     minDistInput.value = displaySettings.minDistance === null ? "" : displaySettings.minDistance;
     maxDistInput.value = displaySettings.maxDistance === null ? "" : displaySettings.maxDistance;
     yScaleSelect.value = displaySettings.yScale;
+    maxCoCInput.value = displaySettings.maxCoC === null ? "" : displaySettings.maxCoC;
     normalizeCheckbox.checked = displaySettings.normalize;
   }
 
@@ -1059,6 +1086,12 @@
     saveSettings();
     drawChart();
   });
+  maxCoCInput.addEventListener("input", () => {
+    const v = parseFloat(maxCoCInput.value);
+    displaySettings.maxCoC = maxCoCInput.value === "" || isNaN(v) || v <= 0 ? null : v;
+    saveSettings();
+    drawChart();
+  });
   normalizeCheckbox.addEventListener("change", () => {
     displaySettings.normalize = normalizeCheckbox.checked;
     saveSettings();
@@ -1067,6 +1100,7 @@
   document.getElementById("set-reset").addEventListener("click", () => {
     displaySettings.minDistance = null;
     displaySettings.maxDistance = null;
+    displaySettings.maxCoC = null;
     syncPopoverFromSettings();
     saveSettings();
     drawChart();
