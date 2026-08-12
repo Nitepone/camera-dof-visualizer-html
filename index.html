@@ -342,6 +342,12 @@
               Normalize blur to full-frame equivalent
             </label>
           </div>
+          <div class="field-row">
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-show-range" checked>
+              Show focus range plot
+            </label>
+          </div>
           <div class="popover-actions">
             <button type="button" id="set-reset">Reset range</button>
             <button type="button" id="set-close">Done</button>
@@ -637,7 +643,7 @@
 
   // ---------- display settings (persisted) ----------
   const SETTINGS_KEY = "dof-explorer-display-settings";
-  let displaySettings = { minDistance: null, maxDistance: null, maxCoC: null, yScale: "linear", normalize: true };
+  let displaySettings = { minDistance: null, maxDistance: null, maxCoC: null, yScale: "linear", normalize: true, showFocusRange: true };
   (function loadSettings() {
     try {
       const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
@@ -647,6 +653,7 @@
         if (saved.maxCoC === null || typeof saved.maxCoC === "number") displaySettings.maxCoC = saved.maxCoC;
         if (saved.yScale === "linear" || saved.yScale === "log") displaySettings.yScale = saved.yScale;
         if (typeof saved.normalize === "boolean") displaySettings.normalize = saved.normalize;
+        if (typeof saved.showFocusRange === "boolean") displaySettings.showFocusRange = saved.showFocusRange;
       }
     } catch (e) { /* ignore malformed/unavailable storage */ }
   })();
@@ -789,7 +796,19 @@
   const legend = document.getElementById("legend");
 
   const PAD = { left: 60, right: 20, top: 16, bottom: 40 };
+  const CHART_BASE_HEIGHT = 420;
+  const RANGE_LANE_H = 12;
+  const RANGE_LANE_GAP = 6;
+  const RANGE_STRIP_BOTTOM_GAP = 16; // blank space between the last lane and the CoC plot
   let lastLayout = null; // cached for pointer interaction
+
+  // Height (in CSS px) of the focus-range strip: one lane per row, stacked in table
+  // order, or 0 when the toggle is off / there are no rows — in which case layout is
+  // identical to before this feature existed.
+  function rangeStripHeight() {
+    if (!displaySettings.showFocusRange || rows.length === 0) return 0;
+    return rows.length * RANGE_LANE_H + (rows.length - 1) * RANGE_LANE_GAP + RANGE_STRIP_BOTTOM_GAP;
+  }
 
   function cssVar(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -823,10 +842,9 @@
     return xs.map((u) => ({ x: u, y: effectiveCoC(row, u) }));
   }
 
-  function resizeCanvas() {
+  function resizeCanvas(height) {
     const dpr = window.devicePixelRatio || 1;
     const rect = wrap.getBoundingClientRect();
-    const height = 420;
     canvas.width = Math.round(rect.width * dpr);
     canvas.height = Math.round(height * dpr);
     canvas.style.height = height + "px";
@@ -834,10 +852,12 @@
   }
 
   function drawChart() {
-    resizeCanvas();
+    const stripH = rangeStripHeight();
+    const height = CHART_BASE_HEIGHT + stripH;
+    const plotTop = PAD.top + stripH;
+    resizeCanvas(height);
     const rect = wrap.getBoundingClientRect();
     const width = rect.width;
-    const height = 420;
     ctx.clearRect(0, 0, width, height);
 
     const { xMin, xMax } = computeDomain();
@@ -874,11 +894,11 @@
     }
 
     const plotW = width - PAD.left - PAD.right;
-    const plotH = height - PAD.top - PAD.bottom;
+    const plotH = height - plotTop - PAD.bottom;
     const xScale = (x) => PAD.left + ((x - xMin) / (xMax - xMin)) * plotW;
     const yScale = isLog
-      ? (y) => PAD.top + plotH - ((Math.log10(Math.max(y, yMinDomain)) - Math.log10(yMinDomain)) / (Math.log10(yMaxDomain) - Math.log10(yMinDomain))) * plotH
-      : (y) => PAD.top + plotH - (Math.max(y, 0) / yMaxDomain) * plotH;
+      ? (y) => plotTop + plotH - ((Math.log10(Math.max(y, yMinDomain)) - Math.log10(yMinDomain)) / (Math.log10(yMaxDomain) - Math.log10(yMinDomain))) * plotH
+      : (y) => plotTop + plotH - (Math.max(y, 0) / yMaxDomain) * plotH;
 
     const gridline = cssVar("--gridline");
     const axisLine = cssVar("--axis-line");
@@ -914,7 +934,7 @@
     // axis lines
     ctx.strokeStyle = axisLine;
     ctx.beginPath();
-    ctx.moveTo(PAD.left + 0.5, PAD.top);
+    ctx.moveTo(PAD.left + 0.5, plotTop);
     ctx.lineTo(PAD.left + 0.5, height - PAD.bottom + 0.5);
     ctx.lineTo(width - PAD.right, height - PAD.bottom + 0.5);
     ctx.stroke();
@@ -925,14 +945,13 @@
     ctx.textBaseline = "alphabetic";
     ctx.fillText("Distance from camera", (PAD.left + width - PAD.right) / 2, height - 4);
     ctx.save();
-    ctx.translate(14, (PAD.top + height - PAD.bottom) / 2);
+    ctx.translate(14, (plotTop + height - PAD.bottom) / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = "center";
     const yTitle = "Circle of confusion" + (displaySettings.normalize ? " (35mm-equivalent)" : " (mm)") + (isLog ? " — log scale" : "");
     ctx.fillText(yTitle, 0, 0);
     ctx.restore();
 
-    // acceptable-CoC dashed reference lines
     // acceptable-CoC boundaries, drawn as vertical lines at the near/far distances
     // where each row's curve crosses its threshold — the depth of field itself.
     curves.forEach(({ row, i }) => {
@@ -947,7 +966,7 @@
         if (!isFinite(d) || d < xMin || d > xMax) return;
         const x = Math.round(xScale(d)) + 0.5;
         ctx.beginPath();
-        ctx.moveTo(x, PAD.top);
+        ctx.moveTo(x, plotTop);
         ctx.lineTo(x, height - PAD.bottom);
         ctx.stroke();
       });
@@ -959,7 +978,7 @@
     // rather than distorting the scale or leaving a gap.
     ctx.save();
     ctx.beginPath();
-    ctx.rect(PAD.left, PAD.top, plotW, plotH);
+    ctx.rect(PAD.left, plotTop, plotW, plotH);
     ctx.clip();
     curves.forEach(({ row, i, pts }) => {
       ctx.strokeStyle = seriesColor(i);
@@ -994,7 +1013,82 @@
       ctx.fill();
     });
 
-    lastLayout = { xMin, xMax, xScale, yScale, plotLeft: PAD.left, plotRight: width - PAD.right, plotTop: PAD.top, plotBottom: height - PAD.bottom };
+    // focus range strip — one lane per row, stacked in table order (row 1 on top),
+    // showing each row's in-focus interval: min/max as the bar's ends (aligned to the
+    // vertical DoF lines above via the same xScale), center as a dot, width as a label.
+    if (stripH > 0) {
+      ctx.font = "10px system-ui, -apple-system, sans-serif";
+      ctx.fillStyle = textMuted;
+      const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+      const capH = RANGE_LANE_H * 0.85;
+      curves.forEach(({ row, i }, idx) => {
+        const limits = dofLimits(row);
+        if (!limits) return; // focus distance not achievable at this focal length — leave the lane blank
+        const laneY = PAD.top + idx * (RANGE_LANE_H + RANGE_LANE_GAP) + RANGE_LANE_H / 2;
+        const color = seriesColor(i);
+        const nearOnScreen = limits.near >= xMin && limits.near <= xMax;
+        const farOnScreen = isFinite(limits.far) && limits.far <= xMax;
+        const nearX = xScale(clamp(limits.near, xMin, xMax));
+        const farX = xScale(farOnScreen ? limits.far : xMax);
+
+        // range bar
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(nearX, laneY);
+        ctx.lineTo(farX, laneY);
+        ctx.stroke();
+
+        // end markers: a straight cap where the boundary itself is visible, otherwise
+        // a chevron pointing off-screen (also covers the far = infinity case)
+        ctx.lineWidth = 2;
+        [{ x: nearX, visible: nearOnScreen, dir: -1 }, { x: farX, visible: farOnScreen, dir: 1 }].forEach(({ x, visible, dir }) => {
+          ctx.beginPath();
+          if (visible) {
+            ctx.moveTo(x, laneY - capH / 2);
+            ctx.lineTo(x, laneY + capH / 2);
+          } else {
+            const armX = x - 4 * dir;
+            ctx.moveTo(armX, laneY - 4);
+            ctx.lineTo(x, laneY);
+            ctx.lineTo(armX, laneY + 4);
+          }
+          ctx.stroke();
+        });
+
+        // center marker — the midpoint of the in-focus interval, not the focus distance
+        if (isFinite(limits.far)) {
+          const centerX = xScale((limits.near + limits.far) / 2);
+          if (centerX >= PAD.left && centerX <= width - PAD.right) {
+            ctx.beginPath();
+            ctx.fillStyle = surface;
+            ctx.arc(centerX, laneY, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.fillStyle = color;
+            ctx.arc(centerX, laneY, 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        // width label — placed after the far end if it fits, else before the near end,
+        // else dropped (never clipped); the legend/table still carry the exact numbers
+        const label = isFinite(limits.far) ? formatDistance(limits.far - limits.near) : "∞ width";
+        ctx.fillStyle = textMuted;
+        ctx.textBaseline = "middle";
+        const tw = ctx.measureText(label).width;
+        if (farX + 6 + tw <= width - PAD.right) {
+          ctx.textAlign = "left";
+          ctx.fillText(label, farX + 6, laneY);
+        } else if (nearX - 6 - tw >= PAD.left) {
+          ctx.textAlign = "right";
+          ctx.fillText(label, nearX - 6, laneY);
+        }
+      });
+    }
+
+    lastLayout = { xMin, xMax, xScale, yScale, plotLeft: PAD.left, plotRight: width - PAD.right, plotTop, plotBottom: height - PAD.bottom };
 
     renderLegend();
   }
@@ -1077,6 +1171,7 @@
   const yScaleSelect = document.getElementById("set-y-scale");
   const maxCoCInput = document.getElementById("set-max-coc");
   const normalizeCheckbox = document.getElementById("set-normalize");
+  const showRangeCheckbox = document.getElementById("set-show-range");
 
   function syncPopoverFromSettings() {
     minDistInput.value = displaySettings.minDistance === null ? "" : displaySettings.minDistance;
@@ -1084,6 +1179,7 @@
     yScaleSelect.value = displaySettings.yScale;
     maxCoCInput.value = displaySettings.maxCoC === null ? "" : displaySettings.maxCoC;
     normalizeCheckbox.checked = displaySettings.normalize;
+    showRangeCheckbox.checked = displaySettings.showFocusRange;
   }
 
   function openPopover() {
@@ -1132,6 +1228,11 @@
   });
   normalizeCheckbox.addEventListener("change", () => {
     displaySettings.normalize = normalizeCheckbox.checked;
+    saveSettings();
+    drawChart();
+  });
+  showRangeCheckbox.addEventListener("change", () => {
+    displaySettings.showFocusRange = showRangeCheckbox.checked;
     saveSettings();
     drawChart();
   });
