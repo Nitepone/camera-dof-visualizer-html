@@ -331,7 +331,7 @@
           </div>
           <div class="field-row">
             <label class="checkbox-row">
-              <input type="checkbox" id="set-normalize">
+              <input type="checkbox" id="set-normalize" checked>
               Normalize blur to full-frame equivalent
             </label>
           </div>
@@ -607,7 +607,7 @@
 
   // ---------- display settings (persisted) ----------
   const SETTINGS_KEY = "dof-explorer-display-settings";
-  let displaySettings = { minDistance: null, maxDistance: null, yScale: "linear", normalize: false };
+  let displaySettings = { minDistance: null, maxDistance: null, yScale: "linear", normalize: true };
   (function loadSettings() {
     try {
       const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
