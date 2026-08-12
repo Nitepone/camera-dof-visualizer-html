@@ -471,6 +471,22 @@
     if (raw === null) return null;
     return displaySettings.normalize ? raw * cropFactor(row.sensor) : raw;
   }
+  // Near/far distances where CoC crosses the acceptable threshold — the classic
+  // hyperfocal depth-of-field limits. Uses the raw (non-normalized) threshold: the
+  // "normalize" display option scales CoC by a constant per-row factor, which cancels
+  // out of where the curve crosses its own threshold, so the boundary distances are
+  // the same either way. far is Infinity once focused beyond the hyperfocal distance.
+  function dofLimits(row) {
+    const f = row.focalLength / 1000; // m
+    const N = row.aperture;
+    const s = row.focusDistance;
+    if (s <= f) return null;
+    const C = acceptableCoC(row.sensor) / 1000; // mm -> m
+    const H = (f * f) / (N * C) + f;
+    const near = Math.max(0, (s * (H - f)) / (H + s - 2 * f));
+    const far = s < H ? (s * (H - f)) / (H - s) : Infinity;
+    return { near, far };
+  }
   function effectiveThreshold(row) {
     const raw = acceptableCoC(row.sensor);
     return displaySettings.normalize ? raw * cropFactor(row.sensor) : raw;
@@ -536,12 +552,13 @@
   }
 
   // ---------- state ----------
+  // Color is assigned by table position (row 1 always gets slot 0, etc.), not by an
+  // identity carried on the row — so it stays deterministic across add/remove/reorder
+  // and exhausts the palette's most CVD-distinct hues first. See seriesColor(index).
   let nextId = 1;
-  let colorCounter = 0;
   function defaultRow(overrides) {
     return Object.assign({
       id: nextId++,
-      colorSlot: colorCounter++,
       sensor: "ff",
       focalLength: 50,
       aperture: 2.8,
@@ -561,12 +578,12 @@
   const ROWS_KEY = "dof-explorer-rows";
   function saveRows() {
     try {
-      const compact = rows.map((r) => ({ sensor: r.sensor, focalLength: r.focalLength, aperture: r.aperture, focusDistance: r.focusDistance, colorSlot: r.colorSlot }));
+      const compact = rows.map((r) => ({ sensor: r.sensor, focalLength: r.focalLength, aperture: r.aperture, focusDistance: r.focusDistance }));
       localStorage.setItem(ROWS_KEY, JSON.stringify(compact));
     } catch (e) { /* storage unavailable */ }
   }
-  // turns plain {sensor, focalLength, aperture, focusDistance, colorSlot} objects (from
-  // storage or a decoded share link) into real rows with fresh ids, validating as it goes
+  // turns plain {sensor, focalLength, aperture, focusDistance} objects (from storage
+  // or a decoded share link) into real rows with fresh ids, validating as it goes
   function rowsFromPlain(list) {
     if (!Array.isArray(list) || list.length === 0) return null;
     const loaded = [];
@@ -574,17 +591,15 @@
       if (!r || !SENSORS[r.sensor]) return;
       const focalLength = Number(r.focalLength), aperture = Number(r.aperture), focusDistance = Number(r.focusDistance);
       if (![focalLength, aperture, focusDistance].every((v) => isFinite(v) && v > 0)) return;
-      const colorSlot = typeof r.colorSlot === "number" && isFinite(r.colorSlot) ? r.colorSlot : colorCounter++;
-      loaded.push({ id: nextId++, colorSlot, sensor: r.sensor, focalLength, aperture, focusDistance });
+      loaded.push({ id: nextId++, sensor: r.sensor, focalLength, aperture, focusDistance });
     });
     if (loaded.length === 0) return null;
-    colorCounter = Math.max(colorCounter, ...loaded.map((r) => r.colorSlot + 1));
     return loaded;
   }
 
   // ---------- shareable URL encoding ----------
   function encodeRowsParam(list) {
-    const compact = list.map((r) => [r.sensor, r.focalLength, r.aperture, r.focusDistance, r.colorSlot]);
+    const compact = list.map((r) => [r.sensor, r.focalLength, r.aperture, r.focusDistance]);
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(compact))));
     return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   }
@@ -594,7 +609,7 @@
       while (b64.length % 4) b64 += "=";
       const compact = JSON.parse(decodeURIComponent(escape(atob(b64))));
       if (!Array.isArray(compact)) return null;
-      return compact.map(([sensor, focalLength, aperture, focusDistance, colorSlot]) => ({ sensor, focalLength, aperture, focusDistance, colorSlot }));
+      return compact.map(([sensor, focalLength, aperture, focusDistance]) => ({ sensor, focalLength, aperture, focusDistance }));
     } catch (e) { return null; }
   }
 
@@ -653,7 +668,7 @@
         .join("");
 
       tr.innerHTML = `
-        <td><span class="swatch" style="background:${seriesColor(row.colorSlot)}"></span></td>
+        <td><span class="swatch" style="background:${seriesColor(i)}"></span></td>
         <td><select data-field="sensor" title="${SENSORS[row.sensor].dims}">${sensorOptions}</select></td>
         <td><input type="number" data-field="focalLength" value="${row.focalLength}" min="4" max="2000" step="1"></td>
         <td><input type="number" data-field="aperture" value="${row.aperture}" min="0.7" max="64" step="0.1"></td>
@@ -712,9 +727,7 @@
     const id = Number(tr.dataset.id);
 
     if (rows.length === 1) {
-      const slot = rows[0].colorSlot;
       rows[0] = defaultRow();
-      rows[0].colorSlot = slot; // keep the same identity color
     } else {
       rows = rows.filter((r) => r.id !== id);
     }
@@ -828,7 +841,7 @@
     ctx.clearRect(0, 0, width, height);
 
     const { xMin, xMax } = computeDomain();
-    const curves = rows.map((row) => ({ row, pts: sampleCurve(row, xMin, xMax, 300) }));
+    const curves = rows.map((row, i) => ({ row, i, pts: sampleCurve(row, xMin, xMax, 300) }));
 
     let yMax;
     if (typeof displaySettings.maxCoC === "number") {
@@ -920,19 +933,24 @@
     ctx.restore();
 
     // acceptable-CoC dashed reference lines
-    curves.forEach(({ row }) => {
-      const limit = effectiveThreshold(row);
-      if (limit > yMaxDomain) return;
-      const y = yScale(limit);
+    // acceptable-CoC boundaries, drawn as vertical lines at the near/far distances
+    // where each row's curve crosses its threshold — the depth of field itself.
+    curves.forEach(({ row, i }) => {
+      const limits = dofLimits(row);
+      if (!limits) return;
       ctx.save();
-      ctx.strokeStyle = seriesColor(row.colorSlot);
+      ctx.strokeStyle = seriesColor(i);
       ctx.globalAlpha = 0.45;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(PAD.left, Math.round(y) + 0.5);
-      ctx.lineTo(width - PAD.right, Math.round(y) + 0.5);
-      ctx.stroke();
+      [limits.near, limits.far].forEach((d) => {
+        if (!isFinite(d) || d < xMin || d > xMax) return;
+        const x = Math.round(xScale(d)) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, PAD.top);
+        ctx.lineTo(x, height - PAD.bottom);
+        ctx.stroke();
+      });
       ctx.restore();
     });
 
@@ -943,8 +961,8 @@
     ctx.beginPath();
     ctx.rect(PAD.left, PAD.top, plotW, plotH);
     ctx.clip();
-    curves.forEach(({ row, pts }) => {
-      ctx.strokeStyle = seriesColor(row.colorSlot);
+    curves.forEach(({ row, i, pts }) => {
+      ctx.strokeStyle = seriesColor(i);
       ctx.lineWidth = 2;
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
@@ -962,7 +980,7 @@
     ctx.restore();
 
     // focus-distance markers on the x-axis
-    rows.forEach((row) => {
+    rows.forEach((row, i) => {
       if (row.focusDistance < xMin || row.focusDistance > xMax) return;
       const x = xScale(row.focusDistance);
       const y = yScale(0);
@@ -971,7 +989,7 @@
       ctx.arc(x, y, 6, 0, Math.PI * 2);
       ctx.fill();
       ctx.beginPath();
-      ctx.fillStyle = seriesColor(row.colorSlot);
+      ctx.fillStyle = seriesColor(i);
       ctx.arc(x, y, 4, 0, Math.PI * 2);
       ctx.fill();
     });
@@ -986,9 +1004,9 @@
   }
 
   function renderLegend() {
-    legend.innerHTML = rows.map((row) => `
+    legend.innerHTML = rows.map((row, i) => `
       <span class="item">
-        <span class="swatch" style="background:${seriesColor(row.colorSlot)}"></span>
+        <span class="swatch" style="background:${seriesColor(i)}"></span>
         ${rowLabel(row)}
       </span>
     `).join("");
@@ -1017,14 +1035,17 @@
     ctx.stroke();
     ctx.restore();
 
-    const items = rows.map((row) => ({ row, c: effectiveCoC(row, u) })).filter((it) => it.c !== null);
+    const items = rows
+      .map((row, i) => ({ row, i, c: effectiveCoC(row, u) }))
+      .filter((it) => it.c !== null)
+      .sort((a, b) => b.c - a.c);
 
     if (items.length === 0) { tooltip.style.display = "none"; return; }
 
     tooltip.innerHTML = `<div class="dist">Distance: ${formatDistance(u)}</div>` +
       items.map((it) => `
         <div class="row">
-          <span class="swatch" style="background:${seriesColor(it.row.colorSlot)}"></span>
+          <span class="swatch" style="background:${seriesColor(it.i)}"></span>
           <span>${it.row.focalLength}mm f/${it.row.aperture}</span>
           <span class="val">${formatCoC(it.c)}</span>
         </div>
