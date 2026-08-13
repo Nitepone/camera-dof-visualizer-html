@@ -99,13 +99,15 @@
     font-size: 12px;
     color: var(--text-secondary);
   }
-  .focus-mode-toggle select { width: auto; font-size: 12px; padding: 4px 6px; }
-  /* #id beats the later `select, input[type="number"] { width: 100% }` rule below,
-     which otherwise wins the tie against an equal-specificity class selector here */
-  #subject-size-input { width: 4.2em; font-size: 12px; padding: 4px 5px; }
-  #subject-size-input::-webkit-outer-spin-button,
-  #subject-size-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-  #subject-size-input { -moz-appearance: textfield; }
+  .focus-mode-toggle select { font-size: 12px; padding: 4px 6px; }
+  .focus-mode-toggle input[type="number"] {
+    width: 4.2em;
+    font-size: 12px;
+    padding: 4px 5px;
+    -moz-appearance: textfield; /* no spinners: the box is only wide enough for the value */
+  }
+  .focus-mode-toggle input[type="number"]::-webkit-outer-spin-button,
+  .focus-mode-toggle input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   .header-controls {
     display: flex;
     align-items: center;
@@ -138,7 +140,6 @@
     display: inline-block;
   }
   select, input[type="number"] {
-    width: 100%;
     min-width: 0;
     background: var(--control-bg);
     color: var(--text-primary);
@@ -149,6 +150,12 @@
     font-size: 13px;
     font-variant-numeric: tabular-nums;
   }
+  /* Controls fill their cell only where they own the full width — inside the table
+     and the settings popover. Scoping this (rather than setting it on every select
+     and number input and then overriding it) is what keeps the header controls from
+     having to out-specify a global rule to size themselves. */
+  .table-wrap select, .table-wrap input[type="number"],
+  .settings-popover select, .settings-popover input[type="number"] { width: 100%; }
   #config-table th:nth-child(1) { width: 3%; }
   #config-table th:nth-child(2) { width: 17%; }
   #config-table th:nth-child(3) { width: 11%; }
@@ -161,7 +168,7 @@
   td.num { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .focus-cell { display: flex; flex-direction: column; gap: 4px; }
   .subject-inputs { display: flex; align-items: center; gap: 3px; }
-  .subject-inputs input { flex: 0 0 3.6em; width: 3.6em; min-width: 0; }
+  .subject-inputs input[type="number"] { flex: 0 0 3.6em; width: 3.6em; }
   .pct-suffix { color: var(--text-muted); font-size: 12px; }
   .computed-distance {
     font-size: 11px;
@@ -224,7 +231,6 @@
     gap: 8px;
   }
   .settings-popover .field-row.pair > div { flex: 1; display: flex; flex-direction: column; gap: 4px; }
-  .settings-popover input, .settings-popover select { width: 100%; }
   .checkbox-row {
     display: flex;
     align-items: center;
@@ -232,7 +238,7 @@
     cursor: pointer;
     color: var(--text-secondary);
   }
-  .checkbox-row input { width: auto; cursor: pointer; }
+  .checkbox-row input { cursor: pointer; }
   .popover-actions {
     display: flex;
     justify-content: space-between;
@@ -417,10 +423,15 @@
     <p>
       This is a thin-lens result and depends only on the lens and focus settings &mdash;
       sensor size doesn't change the physical blur spot. Sensor size does determine
-      what counts as "acceptably sharp": the dashed line for each row is the
-      conventional acceptable circle of confusion, <code>sensor diagonal / 1500</code>.
-      Where a solid curve dips below its dashed line, that part of the scene reads as
-      in focus &mdash; the width of that region is the depth of field.
+      what counts as "acceptably sharp": each row's acceptable circle of confusion is
+      the conventional <code>sensor diagonal / 1500</code>, shown in the table. The two
+      distances where a row's curve crosses that value are its near and far
+      depth-of-field limits, drawn as the pair of dashed vertical lines in the row's
+      color; everything between them reads as in focus, and that span is the depth of
+      field. Equivalently, with hyperfocal distance
+      <code>H = f&sup2;/(N&middot;c) + f</code>, they are
+      <code>s(H&minus;f)/(H+s&minus;2f)</code> and <code>s(H&minus;f)/(H&minus;s)</code>
+      &mdash; the far limit running to infinity once you focus at or beyond <code>H</code>.
     </p>
     <p>
       Sensor size also sets the horizontal field of view for a given focal length:
@@ -475,9 +486,10 @@
       its computed distance updates automatically alongside it whenever subject
       size, percentage, sensor, or focal length changes; the distance itself is
       read-only, derived rather than typed. In this mode the table's "Focus
-      distance" column relabels to "Relative to Frame Subject Size," and rows don't
-      participate in "lock focus distance across rows," since every row's distance
-      already comes from the same shared subject size.
+      distance" column relabels to "Relative to Frame Subject Size," and "lock focus
+      distance across rows" ties the percentages together instead of the distances
+      &mdash; so every row frames the subject identically, each from whatever distance
+      its own field of view requires.
     </p>
   </details>
 </main>
@@ -488,23 +500,25 @@
 
   // ---------- data ----------
   const SENSORS = {
-    ff:    { label: "Full Frame",        dims: "36×24mm",     w: 36,   h: 24   },
-    apsc:  { label: "APS-C",             dims: "23.5×15.6mm", w: 23.5, h: 15.6 },
-    m43:   { label: "Micro Four Thirds", dims: "17.3×13mm",   w: 17.3, h: 13   },
-    mf6x6: { label: "6×6 Medium Format", dims: "56×56mm",     w: 56,   h: 56   },
+    ff:    { label: "Full Frame",        w: 36,   h: 24   },
+    apsc:  { label: "APS-C",             w: 23.5, h: 15.6 },
+    m43:   { label: "Micro Four Thirds", w: 17.3, h: 13   },
+    mf6x6: { label: "6×6 Medium Format", w: 56,   h: 56   },
   };
-
-  const PALETTE_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
-  const PALETTE_DARK  = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
-
-  function isDarkMode() {
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  function sensorDims(key) {
+    return `${SENSORS[key].w}×${SENSORS[key].h}mm`;
   }
-  function palette() {
-    return isDarkMode() ? PALETTE_DARK : PALETTE_LIGHT;
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
+
+  // The palette lives in the stylesheet (--series-1 … --series-8), which already
+  // carries both the light and dark steps — reading it back here keeps one copy of
+  // the hexes instead of a second set duplicated in JS that has to be kept in sync.
+  const SERIES_SLOTS = 8;
   function seriesColor(slot) {
-    return palette()[slot % palette().length];
+    return cssVar(`--series-${(slot % SERIES_SLOTS) + 1}`);
   }
 
   function sensorDiagonal(key) {
@@ -545,14 +559,11 @@
   function cropFactor(sensorKey) {
     return sensorDiagonal("ff") / sensorDiagonal(sensorKey);
   }
-  function equivFocalLength(row) {
-    return row.focalLength * cropFactor(row.sensor);
-  }
-  function equivAperture(row) {
-    return row.aperture * cropFactor(row.sensor);
-  }
+  // the full-frame focal length and f-number that frame the same shot with a
+  // comparable depth of field — both scale by the crop factor
   function formatEquivalent(row) {
-    return `${Math.round(equivFocalLength(row))}mm f/${equivAperture(row).toFixed(1)}`;
+    const k = cropFactor(row.sensor);
+    return `${Math.round(row.focalLength * k)}mm f/${(row.aperture * k).toFixed(1)}`;
   }
 
   // circle of confusion (mm) at object distance u (m), given focal length (mm),
@@ -610,8 +621,9 @@
       if (d >= C) return null;
       C = Math.sqrt(C * C - d * d);
     }
-    const H = (f * f) / (N * C) + f;
-    const near = Math.max(0, (s * (H - f)) / (H + s - 2 * f));
+    const H = (f * f) / (N * C) + f; // hyperfocal distance
+    // both denominators are positive whenever s > f, which the guard above ensures
+    const near = (s * (H - f)) / (H + s - 2 * f);
     const far = s < H ? (s * (H - f)) / (H - s) : Infinity;
     return { near, far };
   }
@@ -690,7 +702,7 @@
   // and exhausts the palette's most CVD-distinct hues first. See seriesColor(index).
   let nextId = 1;
   function defaultRow(overrides) {
-    return Object.assign({
+    const row = Object.assign({
       id: nextId++,
       sensor: "ff",
       focalLength: 50,
@@ -698,6 +710,10 @@
       focusDistance: 5,
       subjectPercent: 20,
     }, overrides);
+    // in subject mode the distance is derived, so a brand-new row must not keep the
+    // literal default — otherwise its percentage and its shown distance disagree
+    recomputeFocusDistance(row);
+    return row;
   }
   const DEFAULT_ROWS = [
     { sensor: "ff",    focalLength: 50, aperture: 1.8, focusDistance: 5 },
@@ -709,21 +725,21 @@
   }
 
   // ---------- row persistence ----------
+  // The persisted shape of a row, declared once: localStorage keeps these as objects
+  // and share links keep them as positional tuples, but both are built from and read
+  // back through this one list, so a new field is added here and nowhere else.
+  // (Focus mode and subject size are global display settings, not per-row.)
+  const ROW_FIELDS = ["sensor", "focalLength", "aperture", "focusDistance", "subjectPercent"];
   const ROWS_KEY = "dof-explorer-rows";
   function saveRows() {
     try {
-      const compact = rows.map((r) => ({
-        sensor: r.sensor, focalLength: r.focalLength, aperture: r.aperture, focusDistance: r.focusDistance,
-        subjectPercent: r.subjectPercent,
-      }));
+      const compact = rows.map((r) => Object.fromEntries(ROW_FIELDS.map((k) => [k, r[k]])));
       localStorage.setItem(ROWS_KEY, JSON.stringify(compact));
     } catch (e) { /* storage unavailable */ }
   }
-  // turns plain {sensor, focalLength, aperture, focusDistance, subjectPercent} objects
-  // (from storage or a decoded share link) into real rows with fresh ids, validating
-  // as it goes. subjectPercent is optional — older saved rows / share links without
-  // it fall back to a sensible default. Focus mode and subject size are global
-  // display settings now, not stored per row.
+  // turns plain ROW_FIELDS-shaped objects (from storage or a decoded share link) into
+  // real rows with fresh ids, validating as it goes. subjectPercent is optional —
+  // older saved rows / share links without it fall back to a sensible default.
   function rowsFromPlain(list) {
     if (!Array.isArray(list) || list.length === 0) return null;
     const loaded = [];
@@ -744,7 +760,7 @@
 
   // ---------- shareable URL encoding ----------
   function encodeRowsParam(list) {
-    const compact = list.map((r) => [r.sensor, r.focalLength, r.aperture, r.focusDistance, r.subjectPercent]);
+    const compact = list.map((r) => ROW_FIELDS.map((k) => r[k]));
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(compact))));
     return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   }
@@ -754,10 +770,9 @@
       while (b64.length % 4) b64 += "=";
       const compact = JSON.parse(decodeURIComponent(escape(atob(b64))));
       if (!Array.isArray(compact)) return null;
-      // older links only have the first 4 fields — the rest destructure to undefined,
-      // which rowsFromPlain() falls back from
-      return compact.map(([sensor, focalLength, aperture, focusDistance, subjectPercent]) =>
-        ({ sensor, focalLength, aperture, focusDistance, subjectPercent }));
+      // shorter tuples from older links leave the trailing fields undefined, which
+      // rowsFromPlain() then falls back from
+      return compact.map((tuple) => Object.fromEntries(ROW_FIELDS.map((k, i) => [k, tuple[i]])));
     } catch (e) { return null; }
   }
 
@@ -784,26 +799,94 @@
   // Declared before `rows` below: initRows() -> rowsFromPlain() calls
   // recomputeFocusDistance(), which reads the global displaySettings.focusMode, so
   // settings must already be loaded by the time rows are constructed.
+  //
+  // Every setting is declared once in SETTING_SPECS: its default, the control that
+  // edits it, how a value is validated, and any work beyond a redraw when it changes.
+  // The storage loader, the control sync, and the change listeners are all generated
+  // from that table, so adding a setting is one line instead of four scattered edits.
   const SETTINGS_KEY = "dof-explorer-display-settings";
-  let displaySettings = { minDistance: null, maxDistance: null, maxCoC: null, yScale: "linear", normalize: true, showFocusRange: true, includeDiffraction: false, focusMode: "distance", subjectSize: 0.3 };
-  (function loadSettings() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
-      if (saved && typeof saved === "object") {
-        if (saved.minDistance === null || typeof saved.minDistance === "number") displaySettings.minDistance = saved.minDistance;
-        if (saved.maxDistance === null || typeof saved.maxDistance === "number") displaySettings.maxDistance = saved.maxDistance;
-        if (saved.maxCoC === null || typeof saved.maxCoC === "number") displaySettings.maxCoC = saved.maxCoC;
-        if (saved.yScale === "linear" || saved.yScale === "log") displaySettings.yScale = saved.yScale;
-        if (typeof saved.normalize === "boolean") displaySettings.normalize = saved.normalize;
-        if (typeof saved.showFocusRange === "boolean") displaySettings.showFocusRange = saved.showFocusRange;
-        if (typeof saved.includeDiffraction === "boolean") displaySettings.includeDiffraction = saved.includeDiffraction;
-        if (saved.focusMode === "distance" || saved.focusMode === "subject") displaySettings.focusMode = saved.focusMode;
-        if (typeof saved.subjectSize === "number" && saved.subjectSize > 0) displaySettings.subjectSize = saved.subjectSize;
-      }
-    } catch (e) { /* ignore malformed/unavailable storage */ }
-  })();
+  const isNumber = (v) => typeof v === "number" && isFinite(v);
+
+  // How each control type is read, written, and validated. `clean` returns the value
+  // to store, or undefined to reject the change outright (a half-typed or nonsense
+  // entry leaves the setting alone) — except that an `optional` number falls back to
+  // null, which every consumer reads as "auto".
+  const CONTROL_KINDS = {
+    checkbox: {
+      event: "change",
+      read: (el) => el.checked,
+      write: (el, v) => { el.checked = v; },
+      clean: (v) => (typeof v === "boolean" ? v : undefined),
+    },
+    select: {
+      event: "change",
+      read: (el) => el.value,
+      write: (el, v) => { el.value = v; },
+      clean: (v, spec) => (spec.values.includes(v) ? v : undefined),
+    },
+    number: {
+      event: "input",
+      read: (el) => (el.value === "" ? null : parseFloat(el.value)),
+      write: (el, v) => { el.value = v === null ? "" : v; },
+      clean: (v, spec) => (isNumber(v) && (!spec.positive || v > 0) ? v : (spec.optional ? null : undefined)),
+    },
+  };
+
+  const SETTING_SPECS = {
+    minDistance:        { def: null,       el: "set-min-dist",       kind: "number", optional: true },
+    maxDistance:        { def: null,       el: "set-max-dist",       kind: "number", optional: true },
+    maxCoC:             { def: null,       el: "set-max-coc",        kind: "number", optional: true, positive: true },
+    yScale:             { def: "linear",   el: "set-y-scale",        kind: "select", values: ["linear", "log"] },
+    normalize:          { def: true,       el: "set-normalize",      kind: "checkbox" },
+    showFocusRange:     { def: true,       el: "set-show-range",     kind: "checkbox" },
+    includeDiffraction: { def: false,      el: "set-diffraction",    kind: "checkbox" },
+    focusMode:          { def: "distance", el: "focus-mode-select",  kind: "select", values: ["distance", "subject"], after: onFocusModeChanged },
+    subjectSize:        { def: 0.3,        el: "subject-size-input", kind: "number", positive: true, after: onSubjectSizeChanged },
+  };
+  // AUTO_SETTINGS are the ones the popover's "Reset range" button clears back to auto
+  const AUTO_SETTINGS = ["minDistance", "maxDistance", "maxCoC"];
+
+  function cleanSetting(key, value) {
+    const spec = SETTING_SPECS[key];
+    return CONTROL_KINDS[spec.kind].clean(value, spec);
+  }
+
+  const displaySettings = {};
+  Object.entries(SETTING_SPECS).forEach(([key, spec]) => { displaySettings[key] = spec.def; });
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    if (saved && typeof saved === "object") {
+      Object.keys(SETTING_SPECS).forEach((key) => {
+        if (!(key in saved)) return;
+        const v = cleanSetting(key, saved[key]);
+        if (v !== undefined) displaySettings[key] = v;
+      });
+    }
+  } catch (e) { /* ignore malformed/unavailable storage */ }
+
   function saveSettings() {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(displaySettings)); } catch (e) { /* storage unavailable */ }
+  }
+
+  // Points every control at its setting: writes the current value in, then routes
+  // edits back out through the same spec. Run once at init, after the DOM exists.
+  function bindSettingControls() {
+    Object.entries(SETTING_SPECS).forEach(([key, spec]) => {
+      const kind = CONTROL_KINDS[spec.kind];
+      spec.node = document.getElementById(spec.el);
+      kind.write(spec.node, displaySettings[key]);
+      spec.node.addEventListener(kind.event, () => {
+        const v = cleanSetting(key, kind.read(spec.node));
+        if (v === undefined) return;
+        displaySettings[key] = v;
+        saveSettings();
+        if (spec.after) spec.after();
+        drawChart();
+      });
+    });
+  }
+  function syncSettingControls() {
+    Object.entries(SETTING_SPECS).forEach(([key, spec]) => CONTROL_KINDS[spec.kind].write(spec.node, displaySettings[key]));
   }
 
   let rows = initRows();
@@ -829,6 +912,14 @@
     return `<input type="number" data-field="focusDistance" value="${row.focusDistance}" min="0.1" max="10000" step="0.01">`;
   }
 
+  // The read-only columns computed from a row's inputs, declared once so the initial
+  // render and the live in-place update can't drift apart.
+  const DERIVED_CELLS = {
+    "fov-cell":   (row) => formatFov(fovDegrees(row.sensor, row.focalLength)),
+    "equiv-cell": (row) => formatEquivalent(row),
+    "coc-cell":   (row) => formatCoC(acceptableCoC(row.sensor)),
+  };
+
   function renderTable() {
     tbody.innerHTML = "";
     rows.forEach((row, i) => {
@@ -841,13 +932,11 @@
 
       tr.innerHTML = `
         <td><span class="swatch" style="background:${seriesColor(i)}"></span></td>
-        <td><select data-field="sensor" title="${SENSORS[row.sensor].dims}">${sensorOptions}</select></td>
+        <td><select data-field="sensor" title="${sensorDims(row.sensor)}">${sensorOptions}</select></td>
         <td><input type="number" data-field="focalLength" value="${row.focalLength}" min="4" max="2000" step="1"></td>
         <td><input type="number" data-field="aperture" value="${row.aperture}" min="0.7" max="64" step="0.1"></td>
         <td class="focus-cell">${focusCellHTML(row)}</td>
-        <td class="num fov-cell">${formatFov(fovDegrees(row.sensor, row.focalLength))}</td>
-        <td class="num equiv-cell">${formatEquivalent(row)}</td>
-        <td class="num coc-cell">${formatCoC(acceptableCoC(row.sensor))}</td>
+        ${Object.entries(DERIVED_CELLS).map(([cls, value]) => `<td class="num ${cls}">${value(row)}</td>`).join("")}
         <td class="actions">
           <button type="button" class="remove" title="Remove row">Remove</button>
         </td>
@@ -857,11 +946,9 @@
   }
 
   function refreshDerivedCells(tr, row) {
-    tr.querySelector('select[data-field="sensor"]').title = SENSORS[row.sensor].dims;
-    tr.querySelector(".fov-cell").textContent = formatFov(fovDegrees(row.sensor, row.focalLength));
-    tr.querySelector(".equiv-cell").textContent = formatEquivalent(row);
-    tr.querySelector(".coc-cell").textContent = formatCoC(acceptableCoC(row.sensor));
-    const computedDistance = tr.querySelector(".computed-distance");
+    tr.querySelector('select[data-field="sensor"]').title = sensorDims(row.sensor);
+    Object.entries(DERIVED_CELLS).forEach(([cls, value]) => { tr.querySelector("." + cls).textContent = value(row); });
+    const computedDistance = tr.querySelector(".computed-distance"); // subject mode only
     if (computedDistance) computedDistance.textContent = `(${formatDistanceCm(row.focusDistance)})`;
   }
 
@@ -894,26 +981,8 @@
       }
       refreshDerivedCells(tr, row);
 
-      // "Lock focus distance across rows" locks whichever field actually drives the
-      // distance in the current global mode — focusDistance when typed directly,
-      // subjectPercent when derived. Both fields only ever exist in their matching
-      // mode, so every row here is guaranteed to be in the same mode — no per-row guard.
-      if (lockFocusDistance && (field === "focusDistance" || field === "subjectPercent")) {
-        rows.forEach((other) => {
-          if (other.id === row.id) return;
-          const otherTr = tbody.querySelector(`tr[data-id="${other.id}"]`);
-          if (field === "focusDistance") {
-            other.focusDistance = v;
-            if (otherTr) otherTr.querySelector('input[data-field="focusDistance"]').value = v.toFixed(2);
-          } else {
-            other.subjectPercent = v;
-            recomputeFocusDistance(other);
-            if (otherTr) {
-              otherTr.querySelector('input[data-field="subjectPercent"]').value = v;
-              refreshDerivedCells(otherTr, other);
-            }
-          }
-        });
+      if (lockFocusDistance && field === lockedField()) {
+        rows.forEach((other) => { if (other.id !== row.id) setLockedField(other, v); });
       }
     }
     saveRows();
@@ -938,7 +1007,7 @@
 
   document.getElementById("add-row-btn").addEventListener("click", () => {
     const newRow = defaultRow();
-    if (lockFocusDistance) newRow.focusDistance = rows[0].focusDistance;
+    if (lockFocusDistance) setLockedField(newRow, rows[0][lockedField()]);
     rows.push(newRow);
     saveRows();
     renderTable();
@@ -953,34 +1022,42 @@
     drawChart();
   });
 
+  // "Lock focus distance across rows" ties whichever field actually drives the
+  // distance in the current mode: the typed distance, or the frame percentage the
+  // distance is derived from. Only one of the two is editable at a time, so every
+  // row is always locked on the same field.
+  function lockedField() {
+    return displaySettings.focusMode === "subject" ? "subjectPercent" : "focusDistance";
+  }
+  // writes the locked field on one row and brings its input + derived cells along
+  // (recomputeFocusDistance is a no-op outside subject mode)
+  function setLockedField(row, value) {
+    row[lockedField()] = value;
+    recomputeFocusDistance(row);
+    const tr = tbody.querySelector(`tr[data-id="${row.id}"]`);
+    if (!tr) return;
+    const input = tr.querySelector(`input[data-field="${lockedField()}"]`);
+    if (input) input.value = lockedField() === "focusDistance" ? value.toFixed(2) : value;
+    refreshDerivedCells(tr, row);
+  }
+
   const lockCheckbox = document.getElementById("lock-focus");
   lockCheckbox.addEventListener("change", () => {
     lockFocusDistance = lockCheckbox.checked;
     if (!lockFocusDistance) return;
-    // sync every row to row[0]'s value in whichever field currently drives distance
-    if (displaySettings.focusMode === "distance") {
-      const target = rows[0].focusDistance;
-      rows.forEach((r) => { r.focusDistance = target; });
-    } else {
-      const target = rows[0].subjectPercent;
-      rows.forEach((r) => { r.subjectPercent = target; recomputeFocusDistance(r); });
-    }
+    const target = rows[0][lockedField()];
+    rows.forEach((r) => setLockedField(r, target));
     saveRows();
     renderTable();
     drawChart();
   });
 
-  const focusModeSelect = document.getElementById("focus-mode-select");
   const subjectSizeToggle = document.getElementById("subject-size-toggle");
-  const subjectSizeInput = document.getElementById("subject-size-input");
   const focusTh = document.getElementById("focus-th");
-
-  function updateFocusHeader() {
-    focusTh.textContent = displaySettings.focusMode === "subject" ? "Relative to Frame Subject Size" : "Focus distance (m)";
-  }
   function syncFocusModeUI() {
-    subjectSizeToggle.hidden = displaySettings.focusMode !== "subject";
-    updateFocusHeader();
+    const subject = displaySettings.focusMode === "subject";
+    subjectSizeToggle.hidden = !subject;
+    focusTh.textContent = subject ? "Relative to Frame Subject Size" : "Focus distance (m)";
   }
 
   // recomputes every row's derived distance + cells without a full table rebuild,
@@ -993,29 +1070,17 @@
     });
   }
 
-  focusModeSelect.value = displaySettings.focusMode;
-  subjectSizeInput.value = displaySettings.subjectSize;
-  syncFocusModeUI();
-
-  focusModeSelect.addEventListener("change", () => {
-    displaySettings.focusMode = focusModeSelect.value === "subject" ? "subject" : "distance";
+  // the two settings whose effects reach past the chart, hooked in via SETTING_SPECS
+  function onFocusModeChanged() {
     syncFocusModeUI();
     rows.forEach(recomputeFocusDistance);
-    saveSettings();
     saveRows();
-    renderTable(); // cell markup differs by mode
-    drawChart();
-  });
-
-  subjectSizeInput.addEventListener("input", () => {
-    const v = parseFloat(subjectSizeInput.value);
-    if (isNaN(v) || v <= 0) return;
-    displaySettings.subjectSize = v;
+    renderTable(); // the focus cell's markup differs by mode
+  }
+  function onSubjectSizeChanged() {
     refreshAllComputedDistances();
-    saveSettings();
     saveRows();
-    drawChart();
-  });
+  }
 
   const shareBtn = document.getElementById("share-btn");
   shareBtn.addEventListener("click", async () => {
@@ -1059,10 +1124,6 @@
     return RANGE_LABEL_H + RANGE_BOX_PAD_V + lanesH + RANGE_BOX_PAD_V + RANGE_STRIP_BOTTOM_GAP;
   }
 
-  function cssVar(name) {
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  }
-
   function computeDomain() {
     const focusDistances = rows.map((r) => r.focusDistance).filter((d) => d > 0);
     const minFocus = focusDistances.length ? Math.min(...focusDistances) : 5;
@@ -1091,6 +1152,17 @@
     return xs.map((u) => ({ x: u, y: effectiveCoC(row, u) }));
   }
 
+  // a series dot wearing a 2px ring in the surface color, so it stays legible where
+  // it crosses a curve or another marker
+  function ringedDot(x, y, color, surface, radius) {
+    [[radius + 2, surface], [radius, color]].forEach(([r, fill]) => {
+      ctx.beginPath();
+      ctx.fillStyle = fill;
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
   function resizeCanvas(height) {
     const dpr = window.devicePixelRatio || 1;
     const rect = wrap.getBoundingClientRect();
@@ -1111,7 +1183,7 @@
     ctx.clearRect(0, 0, width, height);
 
     const { xMin, xMax } = computeDomain();
-    const curves = rows.map((row, i) => ({ row, i, pts: sampleCurve(row, xMin, xMax, 300) }));
+    const samples = rows.map((row) => sampleCurve(row, xMin, xMax, 300)); // parallel to rows
 
     let yMax;
     if (typeof displaySettings.maxCoC === "number") {
@@ -1122,32 +1194,35 @@
       // than anything on the background side — including it would flatten the far
       // side, which is usually the part worth reading, into an unreadable sliver.
       yMax = 0;
-      curves.forEach(({ row, pts }) => pts.forEach((p) => {
-        if (p.y !== null && isFinite(p.y) && p.x >= row.focusDistance) yMax = Math.max(yMax, p.y);
-      }));
-      rows.forEach((row) => { yMax = Math.max(yMax, effectiveThreshold(row)); });
+      rows.forEach((row, i) => {
+        yMax = Math.max(yMax, effectiveThreshold(row));
+        samples[i].forEach((p) => {
+          if (p.y !== null && isFinite(p.y) && p.x >= row.focusDistance) yMax = Math.max(yMax, p.y);
+        });
+      });
       if (yMax <= 0) yMax = 1;
     }
 
     const isLog = displaySettings.yScale === "log";
     const xTicks = niceTicks(xMin, xMax, 6);
 
-    let yMinDomain, yMaxDomain, yTicks;
+    let yMaxDomain, yTicks;
     if (isLog) {
-      yMinDomain = Math.pow(10, Math.floor(Math.log10(LOG_FLOOR_MM)));
-      yMaxDomain = Math.pow(10, Math.ceil(Math.log10(Math.max(yMax * 1.05, yMinDomain * 10))));
-      yTicks = logTicks(yMinDomain, yMaxDomain);
+      // a log axis can't show the true zero at the focus distance, so it bottoms out
+      // at the fixed LOG_FLOOR_MM floor and runs up to the next whole decade
+      yMaxDomain = Math.pow(10, Math.ceil(Math.log10(Math.max(yMax * 1.05, LOG_FLOOR_MM * 10))));
+      yTicks = logTicks(LOG_FLOOR_MM, yMaxDomain);
     } else {
-      yMinDomain = 0;
       yTicks = niceTicks(0, yMax * 1.05, 5);
       yMaxDomain = yTicks[yTicks.length - 1];
     }
 
     const plotW = width - PAD.left - PAD.right;
     const plotH = height - plotTop - PAD.bottom;
+    const logSpan = Math.log10(yMaxDomain) - Math.log10(LOG_FLOOR_MM);
     const xScale = (x) => PAD.left + ((x - xMin) / (xMax - xMin)) * plotW;
     const yScale = isLog
-      ? (y) => plotTop + plotH - ((Math.log10(Math.max(y, yMinDomain)) - Math.log10(yMinDomain)) / (Math.log10(yMaxDomain) - Math.log10(yMinDomain))) * plotH
+      ? (y) => plotTop + plotH - ((Math.log10(Math.max(y, LOG_FLOOR_MM)) - Math.log10(LOG_FLOOR_MM)) / logSpan) * plotH
       : (y) => plotTop + plotH - (Math.max(y, 0) / yMaxDomain) * plotH;
 
     const gridline = cssVar("--gridline");
@@ -1226,7 +1301,7 @@
 
     // acceptable-CoC boundaries, drawn as vertical lines at the near/far distances
     // where each row's curve crosses its threshold — the depth of field itself.
-    curves.forEach(({ row, i }) => {
+    rows.forEach((row, i) => {
       const limits = dofLimits(row);
       if (!limits) return;
       ctx.save();
@@ -1252,7 +1327,7 @@
     ctx.beginPath();
     ctx.rect(PAD.left, plotTop, plotW, plotH);
     ctx.clip();
-    curves.forEach(({ row, i, pts }) => {
+    samples.forEach((pts, i) => {
       ctx.strokeStyle = seriesColor(i);
       ctx.lineWidth = 2;
       ctx.lineJoin = "round";
@@ -1273,110 +1348,96 @@
     // focus-distance markers on the x-axis
     rows.forEach((row, i) => {
       if (row.focusDistance < xMin || row.focusDistance > xMax) return;
-      const x = xScale(row.focusDistance);
-      const y = yScale(0);
-      ctx.beginPath();
-      ctx.fillStyle = surface;
-      ctx.arc(x, y, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.fillStyle = seriesColor(i);
-      ctx.arc(x, y, 4, 0, Math.PI * 2);
-      ctx.fill();
+      ringedDot(xScale(row.focusDistance), yScale(0), seriesColor(i), surface, 4);
     });
 
-    // focus range strip — one lane per row, stacked in table order (row 1 on top),
-    // showing each row's in-focus interval: min/max as the bar's ends (aligned to the
-    // vertical DoF lines above via the same xScale), center as a dot, width as a label.
-    if (stripH > 0) {
-      ctx.font = "10px system-ui, -apple-system, sans-serif";
-      ctx.fillStyle = textMuted;
-      ctx.textAlign = "left";
-      ctx.textBaseline = "alphabetic";
-      ctx.fillText("Focus range", PAD.left + RANGE_TEXT_PAD_X, PAD.top + RANGE_LABEL_H - 4);
-
-      const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
-      const capH = RANGE_LANE_H * 0.85;
-      const lanesTop = rangeBoxTop + RANGE_BOX_PAD_V;
-      curves.forEach(({ row, i }, idx) => {
-        const limits = dofLimits(row);
-        if (!limits) return; // focus distance not achievable at this focal length — leave the lane blank
-        const laneY = lanesTop + idx * (RANGE_LANE_H + RANGE_LANE_GAP) + RANGE_LANE_H / 2;
-        const color = seriesColor(i);
-        const nearOnScreen = limits.near >= xMin && limits.near <= xMax;
-        const farOnScreen = isFinite(limits.far) && limits.far <= xMax;
-        const nearX = xScale(clamp(limits.near, xMin, xMax));
-        const farX = xScale(farOnScreen ? limits.far : xMax);
-
-        // range bar
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(nearX, laneY);
-        ctx.lineTo(farX, laneY);
-        ctx.stroke();
-
-        // end markers: a straight cap where the boundary itself is visible, otherwise
-        // a chevron pointing off-screen (also covers the far = infinity case)
-        ctx.lineWidth = 2;
-        [{ x: nearX, visible: nearOnScreen, dir: -1 }, { x: farX, visible: farOnScreen, dir: 1 }].forEach(({ x, visible, dir }) => {
-          ctx.beginPath();
-          if (visible) {
-            ctx.moveTo(x, laneY - capH / 2);
-            ctx.lineTo(x, laneY + capH / 2);
-          } else {
-            const armX = x - 4 * dir;
-            ctx.moveTo(armX, laneY - 4);
-            ctx.lineTo(x, laneY);
-            ctx.lineTo(armX, laneY + 4);
-          }
-          ctx.stroke();
-        });
-
-        // center marker — the focus distance itself (where CoC = 0), not the midpoint
-        // of the near/far interval; near/far falloff is asymmetric so they usually differ
-        if (row.focusDistance >= xMin && row.focusDistance <= xMax) {
-          const centerX = xScale(row.focusDistance);
-          ctx.beginPath();
-          ctx.fillStyle = surface;
-          ctx.arc(centerX, laneY, 5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.fillStyle = color;
-          ctx.arc(centerX, laneY, 3, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // label — "center [min..max] (range: width)" — placed after the far end if it
-        // fits, else before the near end, else dropped (never clipped)
-        const label = isFinite(limits.far)
-          ? `${formatDistance(row.focusDistance)} [${formatDistance(limits.near)}..${formatDistance(limits.far)}] (range: ${formatDistance(limits.far - limits.near)})`
-          : `${formatDistance(row.focusDistance)} [${formatDistance(limits.near)}..∞) (range: ∞)`;
-        ctx.fillStyle = textMuted;
-        ctx.textBaseline = "middle";
-        const tw = ctx.measureText(label).width;
-        if (farX + 6 + tw <= width - PAD.right) {
-          ctx.textAlign = "left";
-          ctx.fillText(label, farX + 6, laneY);
-        } else if (nearX - 6 - tw >= PAD.left) {
-          ctx.textAlign = "right";
-          ctx.fillText(label, nearX - 6, laneY);
-        }
-      });
-
-      // frame just the lanes (not the heading) in a square box aligned to the plot's
-      // left/right edges, with equal padding above the first lane and below the last
-      const lanesH = curves.length * RANGE_LANE_H + (curves.length - 1) * RANGE_LANE_GAP;
-      const boxBottom = lanesTop + lanesH + RANGE_BOX_PAD_V;
-      ctx.strokeStyle = cssVar("--border");
-      ctx.lineWidth = 1;
-      ctx.strokeRect(PAD.left + 0.5, rangeBoxTop + 0.5, plotW - 1, boxBottom - rangeBoxTop - 1);
-    }
+    if (stripH > 0) drawFocusRangeStrip({ xScale, xMin, xMax, width, plotW, rangeBoxTop, textMuted, surface });
 
     lastLayout = { xMin, xMax, xScale, yScale, plotLeft: PAD.left, plotRight: width - PAD.right, plotTop, plotBottom: height - PAD.bottom };
 
     renderLegend();
+  }
+
+  // Focus range strip — one lane per row, stacked in table order (row 1 on top),
+  // showing each row's in-focus interval: near/far as the bar's ends (aligned to the
+  // vertical DoF lines below, via the same xScale), the focus distance as a dot, and
+  // the numbers as a label. Drawn above the plot, inside its own box.
+  function drawFocusRangeStrip({ xScale, xMin, xMax, width, plotW, rangeBoxTop, textMuted, surface }) {
+    ctx.font = "10px system-ui, -apple-system, sans-serif";
+    ctx.fillStyle = textMuted;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("Focus range", PAD.left + RANGE_TEXT_PAD_X, PAD.top + RANGE_LABEL_H - 4);
+
+    const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+    const capH = RANGE_LANE_H * 0.85;
+    const lanesTop = rangeBoxTop + RANGE_BOX_PAD_V;
+    rows.forEach((row, i) => {
+      const limits = dofLimits(row);
+      if (!limits) return; // nothing is in focus for this row — leave the lane blank
+      const laneY = lanesTop + i * (RANGE_LANE_H + RANGE_LANE_GAP) + RANGE_LANE_H / 2;
+      const color = seriesColor(i);
+      const nearOnScreen = limits.near >= xMin && limits.near <= xMax;
+      const farOnScreen = isFinite(limits.far) && limits.far <= xMax;
+      const nearX = xScale(clamp(limits.near, xMin, xMax));
+      const farX = xScale(farOnScreen ? limits.far : xMax);
+
+      // range bar
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(nearX, laneY);
+      ctx.lineTo(farX, laneY);
+      ctx.stroke();
+
+      // end markers: a straight cap where the boundary itself is visible, otherwise
+      // a chevron pointing off-screen (also covers the far = infinity case)
+      ctx.lineWidth = 2;
+      [{ x: nearX, visible: nearOnScreen, dir: -1 }, { x: farX, visible: farOnScreen, dir: 1 }].forEach(({ x, visible, dir }) => {
+        ctx.beginPath();
+        if (visible) {
+          ctx.moveTo(x, laneY - capH / 2);
+          ctx.lineTo(x, laneY + capH / 2);
+        } else {
+          const armX = x - 4 * dir;
+          ctx.moveTo(armX, laneY - 4);
+          ctx.lineTo(x, laneY);
+          ctx.lineTo(armX, laneY + 4);
+        }
+        ctx.stroke();
+      });
+
+      // center marker — the focus distance itself (where CoC = 0), not the midpoint
+      // of the near/far interval; near/far falloff is asymmetric so they usually differ
+      if (row.focusDistance >= xMin && row.focusDistance <= xMax) {
+        ringedDot(xScale(row.focusDistance), laneY, color, surface, 3);
+      }
+
+      // label — "center [near..far] (range: width)" — placed after the far end if it
+      // fits, else before the near end, else dropped (never clipped)
+      const label = isFinite(limits.far)
+        ? `${formatDistance(row.focusDistance)} [${formatDistance(limits.near)}..${formatDistance(limits.far)}] (range: ${formatDistance(limits.far - limits.near)})`
+        : `${formatDistance(row.focusDistance)} [${formatDistance(limits.near)}..∞) (range: ∞)`;
+      ctx.fillStyle = textMuted;
+      ctx.textBaseline = "middle";
+      const tw = ctx.measureText(label).width;
+      if (farX + 6 + tw <= width - PAD.right) {
+        ctx.textAlign = "left";
+        ctx.fillText(label, farX + 6, laneY);
+      } else if (nearX - 6 - tw >= PAD.left) {
+        ctx.textAlign = "right";
+        ctx.fillText(label, nearX - 6, laneY);
+      }
+    });
+
+    // frame just the lanes (not the heading) in a square box aligned to the plot's
+    // left/right edges, with equal padding above the first lane and below the last
+    const lanesH = rows.length * RANGE_LANE_H + (rows.length - 1) * RANGE_LANE_GAP;
+    const boxBottom = lanesTop + lanesH + RANGE_BOX_PAD_V;
+    ctx.strokeStyle = cssVar("--border");
+    ctx.lineWidth = 1;
+    ctx.strokeRect(PAD.left + 0.5, rangeBoxTop + 0.5, plotW - 1, boxBottom - rangeBoxTop - 1);
   }
 
   function rowLabel(row) {
@@ -1452,94 +1513,34 @@
   // ---------- display settings popover ----------
   const settingsBtn = document.getElementById("settings-btn");
   const settingsPopover = document.getElementById("settings-popover");
-  const minDistInput = document.getElementById("set-min-dist");
-  const maxDistInput = document.getElementById("set-max-dist");
-  const yScaleSelect = document.getElementById("set-y-scale");
-  const maxCoCInput = document.getElementById("set-max-coc");
-  const normalizeCheckbox = document.getElementById("set-normalize");
-  const showRangeCheckbox = document.getElementById("set-show-range");
-  const diffractionCheckbox = document.getElementById("set-diffraction");
 
-  function syncPopoverFromSettings() {
-    minDistInput.value = displaySettings.minDistance === null ? "" : displaySettings.minDistance;
-    maxDistInput.value = displaySettings.maxDistance === null ? "" : displaySettings.maxDistance;
-    yScaleSelect.value = displaySettings.yScale;
-    maxCoCInput.value = displaySettings.maxCoC === null ? "" : displaySettings.maxCoC;
-    normalizeCheckbox.checked = displaySettings.normalize;
-    showRangeCheckbox.checked = displaySettings.showFocusRange;
-    diffractionCheckbox.checked = displaySettings.includeDiffraction;
-  }
-
-  function openPopover() {
-    settingsPopover.hidden = false;
-    settingsBtn.setAttribute("aria-expanded", "true");
-  }
-  function closePopover() {
-    settingsPopover.hidden = true;
-    settingsBtn.setAttribute("aria-expanded", "false");
+  function setPopoverOpen(open) {
+    settingsPopover.hidden = !open;
+    settingsBtn.setAttribute("aria-expanded", String(open));
   }
 
   settingsBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (settingsPopover.hidden) openPopover(); else closePopover();
+    setPopoverOpen(settingsPopover.hidden);
   });
-  document.getElementById("set-close").addEventListener("click", closePopover);
+  document.getElementById("set-close").addEventListener("click", () => setPopoverOpen(false));
   document.addEventListener("click", (e) => {
-    if (!settingsPopover.hidden && !settingsPopover.contains(e.target) && e.target !== settingsBtn) closePopover();
+    if (!settingsPopover.hidden && !settingsPopover.contains(e.target) && e.target !== settingsBtn) setPopoverOpen(false);
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !settingsPopover.hidden) closePopover();
+    if (e.key === "Escape") setPopoverOpen(false);
   });
 
-  minDistInput.addEventListener("input", () => {
-    const v = parseFloat(minDistInput.value);
-    displaySettings.minDistance = minDistInput.value === "" || isNaN(v) ? null : v;
-    saveSettings();
-    drawChart();
-  });
-  maxDistInput.addEventListener("input", () => {
-    const v = parseFloat(maxDistInput.value);
-    displaySettings.maxDistance = maxDistInput.value === "" || isNaN(v) ? null : v;
-    saveSettings();
-    drawChart();
-  });
-  yScaleSelect.addEventListener("change", () => {
-    displaySettings.yScale = yScaleSelect.value === "log" ? "log" : "linear";
-    saveSettings();
-    drawChart();
-  });
-  maxCoCInput.addEventListener("input", () => {
-    const v = parseFloat(maxCoCInput.value);
-    displaySettings.maxCoC = maxCoCInput.value === "" || isNaN(v) || v <= 0 ? null : v;
-    saveSettings();
-    drawChart();
-  });
-  normalizeCheckbox.addEventListener("change", () => {
-    displaySettings.normalize = normalizeCheckbox.checked;
-    saveSettings();
-    drawChart();
-  });
-  showRangeCheckbox.addEventListener("change", () => {
-    displaySettings.showFocusRange = showRangeCheckbox.checked;
-    saveSettings();
-    drawChart();
-  });
-  diffractionCheckbox.addEventListener("change", () => {
-    displaySettings.includeDiffraction = diffractionCheckbox.checked;
-    saveSettings();
-    drawChart();
-  });
   document.getElementById("set-reset").addEventListener("click", () => {
-    displaySettings.minDistance = null;
-    displaySettings.maxDistance = null;
-    displaySettings.maxCoC = null;
-    syncPopoverFromSettings();
+    AUTO_SETTINGS.forEach((key) => { displaySettings[key] = null; });
+    syncSettingControls();
     saveSettings();
     drawChart();
   });
 
   // ---------- init ----------
-  syncPopoverFromSettings();
+  bindSettingControls();
+  syncFocusModeUI();
   renderTable();
   drawChart();
 })();
