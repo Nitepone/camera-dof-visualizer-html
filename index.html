@@ -1072,9 +1072,11 @@
           }
         }
 
-        // width label — placed after the far end if it fits, else before the near end,
-        // else dropped (never clipped); the legend/table still carry the exact numbers
-        const label = isFinite(limits.far) ? formatDistance(limits.far - limits.near) : "∞ width";
+        // label — "center [min..max] (range: width)" — placed after the far end if it
+        // fits, else before the near end, else dropped (never clipped)
+        const label = isFinite(limits.far)
+          ? `${formatDistance((limits.near + limits.far) / 2)} [${formatDistance(limits.near)}..${formatDistance(limits.far)}] (range: ${formatDistance(limits.far - limits.near)})`
+          : `[${formatDistance(limits.near)}..∞) (range: ∞)`;
         ctx.fillStyle = textMuted;
         ctx.textBaseline = "middle";
         const tw = ctx.measureText(label).width;
