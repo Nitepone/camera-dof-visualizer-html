@@ -90,6 +90,14 @@
     cursor: pointer;
   }
   .lock-toggle input { cursor: pointer; }
+  .focus-mode-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .focus-mode-toggle select { width: auto; font-size: 12px; padding: 4px 6px; }
   .header-controls {
     display: flex;
     align-items: center;
@@ -288,6 +296,13 @@
         <label class="lock-toggle">
           <input type="checkbox" id="lock-focus">
           Lock focus distance across rows
+        </label>
+        <label class="focus-mode-toggle">
+          Focus distance:
+          <select id="focus-mode-select">
+            <option value="distance">Distance</option>
+            <option value="subject">Subject %</option>
+          </select>
         </label>
         <button type="button" class="share-btn" id="share-btn" title="Copy a link that reproduces these rows">🔗 Copy link</button>
       </div>
@@ -498,10 +513,11 @@
     return subjectSizeM / (2 * fraction * Math.tan(hfovRad / 2));
   }
   // Recomputes and writes row.focusDistance from its subject-size inputs. Only
-  // meaningful in "subject" focus mode; a no-op otherwise. Called whenever sensor,
-  // focal length, subject size, or subject percent change on a subject-mode row.
+  // meaningful when the global focus mode (displaySettings.focusMode) is "subject";
+  // a no-op otherwise. Called whenever sensor, focal length, subject size, or subject
+  // percent change, and whenever the global mode itself switches to "subject".
   function recomputeFocusDistance(row) {
-    if (row.focusMode !== "subject") return;
+    if (displaySettings.focusMode !== "subject") return;
     const d = distanceForSubjectSize(row.sensor, row.focalLength, row.subjectSize, row.subjectPercent);
     if (isFinite(d) && d > 0) row.focusDistance = d;
   }
@@ -656,7 +672,6 @@
       focalLength: 50,
       aperture: 2.8,
       focusDistance: 5,
-      focusMode: "distance",
       subjectSize: 0.3,
       subjectPercent: 20,
     }, overrides);
@@ -676,15 +691,16 @@
     try {
       const compact = rows.map((r) => ({
         sensor: r.sensor, focalLength: r.focalLength, aperture: r.aperture, focusDistance: r.focusDistance,
-        focusMode: r.focusMode, subjectSize: r.subjectSize, subjectPercent: r.subjectPercent,
+        subjectSize: r.subjectSize, subjectPercent: r.subjectPercent,
       }));
       localStorage.setItem(ROWS_KEY, JSON.stringify(compact));
     } catch (e) { /* storage unavailable */ }
   }
-  // turns plain {sensor, focalLength, aperture, focusDistance, focusMode, subjectSize,
+  // turns plain {sensor, focalLength, aperture, focusDistance, subjectSize,
   // subjectPercent} objects (from storage or a decoded share link) into real rows
-  // with fresh ids, validating as it goes. The subject-mode fields are optional —
-  // older saved rows / share links without them fall back to sensible defaults.
+  // with fresh ids, validating as it goes. The subject-size fields are optional —
+  // older saved rows / share links without them fall back to sensible defaults. The
+  // focus mode itself is a global display setting now, not stored per row.
   function rowsFromPlain(list) {
     if (!Array.isArray(list) || list.length === 0) return null;
     const loaded = [];
@@ -692,11 +708,10 @@
       if (!r || !SENSORS[r.sensor]) return;
       const focalLength = Number(r.focalLength), aperture = Number(r.aperture), focusDistance = Number(r.focusDistance);
       if (![focalLength, aperture, focusDistance].every((v) => isFinite(v) && v > 0)) return;
-      const focusMode = r.focusMode === "subject" ? "subject" : "distance";
       const subjectSize = isFinite(Number(r.subjectSize)) && Number(r.subjectSize) > 0 ? Number(r.subjectSize) : 0.3;
       const subjectPercent = isFinite(Number(r.subjectPercent)) && Number(r.subjectPercent) > 0 ? Number(r.subjectPercent) : 20;
-      const row = { id: nextId++, sensor: r.sensor, focalLength, aperture, focusDistance, focusMode, subjectSize, subjectPercent };
-      recomputeFocusDistance(row); // keep focusDistance consistent if loaded as subject mode
+      const row = { id: nextId++, sensor: r.sensor, focalLength, aperture, focusDistance, subjectSize, subjectPercent };
+      recomputeFocusDistance(row); // keep focusDistance consistent if the global mode is "subject"
       loaded.push(row);
     });
     if (loaded.length === 0) return null;
@@ -705,7 +720,7 @@
 
   // ---------- shareable URL encoding ----------
   function encodeRowsParam(list) {
-    const compact = list.map((r) => [r.sensor, r.focalLength, r.aperture, r.focusDistance, r.focusMode, r.subjectSize, r.subjectPercent]);
+    const compact = list.map((r) => [r.sensor, r.focalLength, r.aperture, r.focusDistance, r.subjectSize, r.subjectPercent]);
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(compact))));
     return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   }
@@ -717,8 +732,8 @@
       if (!Array.isArray(compact)) return null;
       // older links only have the first 4 fields — the rest destructure to undefined,
       // which rowsFromPlain() falls back from
-      return compact.map(([sensor, focalLength, aperture, focusDistance, focusMode, subjectSize, subjectPercent]) =>
-        ({ sensor, focalLength, aperture, focusDistance, focusMode, subjectSize, subjectPercent }));
+      return compact.map(([sensor, focalLength, aperture, focusDistance, subjectSize, subjectPercent]) =>
+        ({ sensor, focalLength, aperture, focusDistance, subjectSize, subjectPercent }));
     } catch (e) { return null; }
   }
 
@@ -741,12 +756,12 @@
     return defaultRows();
   }
 
-  let rows = initRows();
-  let lockFocusDistance = false;
-
   // ---------- display settings (persisted) ----------
+  // Declared before `rows` below: initRows() -> rowsFromPlain() calls
+  // recomputeFocusDistance(), which reads the global displaySettings.focusMode, so
+  // settings must already be loaded by the time rows are constructed.
   const SETTINGS_KEY = "dof-explorer-display-settings";
-  let displaySettings = { minDistance: null, maxDistance: null, maxCoC: null, yScale: "linear", normalize: true, showFocusRange: true, includeDiffraction: false };
+  let displaySettings = { minDistance: null, maxDistance: null, maxCoC: null, yScale: "linear", normalize: true, showFocusRange: true, includeDiffraction: false, focusMode: "distance" };
   (function loadSettings() {
     try {
       const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
@@ -758,6 +773,7 @@
         if (typeof saved.normalize === "boolean") displaySettings.normalize = saved.normalize;
         if (typeof saved.showFocusRange === "boolean") displaySettings.showFocusRange = saved.showFocusRange;
         if (typeof saved.includeDiffraction === "boolean") displaySettings.includeDiffraction = saved.includeDiffraction;
+        if (saved.focusMode === "distance" || saved.focusMode === "subject") displaySettings.focusMode = saved.focusMode;
       }
     } catch (e) { /* ignore malformed/unavailable storage */ }
   })();
@@ -765,28 +781,27 @@
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(displaySettings)); } catch (e) { /* storage unavailable */ }
   }
 
+  let rows = initRows();
+  let lockFocusDistance = false;
+
   // ---------- table rendering ----------
   const tbody = document.getElementById("config-tbody");
 
-  // Focus-distance cell markup: a mode select, plus either a plain distance input or
-  // (in subject mode) subject-size + percent inputs and a read-only computed distance.
+  // Focus-distance cell markup: either a plain distance input, or (when the global
+  // focus mode is "subject") subject-size + percent inputs and a read-only computed
+  // distance. The mode itself is a single global control (#focus-mode-select), not
+  // per row, so every row's cell follows the same branch.
   function focusCellHTML(row) {
-    const modeInput = row.focusMode === "subject"
-      ? `
+    if (displaySettings.focusMode === "subject") {
+      return `
         <div class="subject-inputs">
           <input type="number" data-field="subjectSize" value="${row.subjectSize}" min="0.001" step="0.01" title="Subject size (m)">
           <input type="number" data-field="subjectPercent" value="${row.subjectPercent}" min="0.1" step="1" title="% of horizontal frame">
         </div>
         <div class="computed-distance" title="Computed focus distance">${formatDistance(row.focusDistance)}</div>
-      `
-      : `<input type="number" data-field="focusDistance" value="${row.focusDistance}" min="0.1" max="10000" step="0.1">`;
-    return `
-      <select data-field="focusMode">
-        <option value="distance" ${row.focusMode === "distance" ? "selected" : ""}>Distance</option>
-        <option value="subject" ${row.focusMode === "subject" ? "selected" : ""}>Subject %</option>
-      </select>
-      ${modeInput}
-    `;
+      `;
+    }
+    return `<input type="number" data-field="focusDistance" value="${row.focusDistance}" min="0.1" max="10000" step="0.1">`;
   }
 
   function renderTable() {
@@ -836,13 +851,6 @@
       row.sensor = e.target.value;
       recomputeFocusDistance(row); // FOV depends on sensor, which subject mode needs
       refreshDerivedCells(tr, row);
-    } else if (field === "focusMode") {
-      row.focusMode = e.target.value === "subject" ? "subject" : "distance";
-      recomputeFocusDistance(row);
-      saveRows();
-      renderTable(); // cell markup differs by mode, unlike the fields below
-      drawChart();
-      return;
     } else {
       const v = parseFloat(e.target.value);
       if (isNaN(v) || v <= 0) return;
@@ -854,11 +862,11 @@
       }
       refreshDerivedCells(tr, row);
 
+      // focusDistance is only ever editable when the global mode is "distance", so
+      // every row it could propagate to is in the same mode — no per-row guard needed
       if (field === "focusDistance" && lockFocusDistance) {
         rows.forEach((other) => {
-          // subject-mode rows derive their own distance — propagating here would
-          // just get overwritten by the next recompute, so leave them alone
-          if (other.id === row.id || other.focusMode === "subject") return;
+          if (other.id === row.id) return;
           other.focusDistance = v;
           const otherTr = tbody.querySelector(`tr[data-id="${other.id}"]`);
           if (otherTr) otherTr.querySelector('input[data-field="focusDistance"]').value = v;
@@ -905,13 +913,26 @@
   const lockCheckbox = document.getElementById("lock-focus");
   lockCheckbox.addEventListener("change", () => {
     lockFocusDistance = lockCheckbox.checked;
-    if (lockFocusDistance) {
+    // syncing to rows[0]'s distance only makes sense when distances are typed
+    // directly — in subject mode every row's distance is already derived
+    if (lockFocusDistance && displaySettings.focusMode === "distance") {
       const target = rows[0].focusDistance;
-      rows.forEach((r) => { if (r.focusMode !== "subject") r.focusDistance = target; });
+      rows.forEach((r) => { r.focusDistance = target; });
       saveRows();
       renderTable();
       drawChart();
     }
+  });
+
+  const focusModeSelect = document.getElementById("focus-mode-select");
+  focusModeSelect.value = displaySettings.focusMode;
+  focusModeSelect.addEventListener("change", () => {
+    displaySettings.focusMode = focusModeSelect.value === "subject" ? "subject" : "distance";
+    rows.forEach(recomputeFocusDistance);
+    saveSettings();
+    saveRows();
+    renderTable();
+    drawChart();
   });
 
   const shareBtn = document.getElementById("share-btn");
