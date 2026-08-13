@@ -1057,26 +1057,25 @@
           ctx.stroke();
         });
 
-        // center marker — the midpoint of the in-focus interval, not the focus distance
-        if (isFinite(limits.far)) {
-          const centerX = xScale((limits.near + limits.far) / 2);
-          if (centerX >= PAD.left && centerX <= width - PAD.right) {
-            ctx.beginPath();
-            ctx.fillStyle = surface;
-            ctx.arc(centerX, laneY, 5, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.fillStyle = color;
-            ctx.arc(centerX, laneY, 3, 0, Math.PI * 2);
-            ctx.fill();
-          }
+        // center marker — the focus distance itself (where CoC = 0), not the midpoint
+        // of the near/far interval; near/far falloff is asymmetric so they usually differ
+        if (row.focusDistance >= xMin && row.focusDistance <= xMax) {
+          const centerX = xScale(row.focusDistance);
+          ctx.beginPath();
+          ctx.fillStyle = surface;
+          ctx.arc(centerX, laneY, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.fillStyle = color;
+          ctx.arc(centerX, laneY, 3, 0, Math.PI * 2);
+          ctx.fill();
         }
 
         // label — "center [min..max] (range: width)" — placed after the far end if it
         // fits, else before the near end, else dropped (never clipped)
         const label = isFinite(limits.far)
-          ? `${formatDistance((limits.near + limits.far) / 2)} [${formatDistance(limits.near)}..${formatDistance(limits.far)}] (range: ${formatDistance(limits.far - limits.near)})`
-          : `[${formatDistance(limits.near)}..∞) (range: ∞)`;
+          ? `${formatDistance(row.focusDistance)} [${formatDistance(limits.near)}..${formatDistance(limits.far)}] (range: ${formatDistance(limits.far - limits.near)})`
+          : `${formatDistance(row.focusDistance)} [${formatDistance(limits.near)}..∞) (range: ∞)`;
         ctx.fillStyle = textMuted;
         ctx.textBaseline = "middle";
         const tw = ctx.measureText(label).width;
