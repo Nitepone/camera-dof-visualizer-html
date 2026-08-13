@@ -348,6 +348,12 @@
               Show focus range plot
             </label>
           </div>
+          <div class="field-row">
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-diffraction">
+              Include diffraction blur
+            </label>
+          </div>
           <div class="popover-actions">
             <button type="button" id="set-reset">Reset range</button>
             <button type="button" id="set-close">Done</button>
@@ -399,6 +405,20 @@
       curve and threshold by its row's crop factor, matching what you'd actually see
       comparing final images enlarged to the same output size &mdash; this is what
       makes the graph agree with the 35mm-equivalent column.
+    </p>
+    <p>
+      The formula above is geometric (ray) optics and lets the curve reach a true
+      zero at the focus distance. In reality, diffraction through the aperture spreads
+      even a perfectly focused point into a small disk &mdash; a wave-optics floor
+      that geometric optics doesn't model, roughly <code>2.44 &middot; &lambda; &middot; N</code>
+      in diameter (&lambda; &asymp; 550nm, standing in for white light), independent of
+      focal length, sensor size, or distance. The <strong>Include diffraction
+      blur</strong> option combines this floor with the geometric curve in quadrature,
+      <code>sqrt(defocus&sup2; + diffraction&sup2;)</code> &mdash; the usual approximation
+      for combining two independent blur sources. Past a sensor's diffraction-limited
+      aperture (where the diffraction floor alone already exceeds its acceptable CoC),
+      no distance registers as "in focus" by that criterion, so the near/far markers
+      and focus-range lane disappear for rows stopped down that far.
     </p>
   </details>
 </main>
@@ -469,25 +489,48 @@
     return cMeters * 1000; // -> mm
   }
 
-  // CoC as plotted: raw sensor-plane blur, or (when normalized) blur scaled to what
+  // Diffraction blur (mm): the Airy disk diameter at the aperture's entrance pupil,
+  // independent of focal length, sensor size, or distance — a fixed floor imposed by
+  // wave optics. λ ≈ 550nm (green) stands in for white light, the usual convention.
+  const DIFFRACTION_WAVELENGTH_MM = 0.00055;
+  function diffractionCoC(fNumber) {
+    return 2.44 * DIFFRACTION_WAVELENGTH_MM * fNumber;
+  }
+
+  // CoC as plotted: raw sensor-plane defocus blur, optionally combined with the
+  // diffraction floor in quadrature (the standard practical approximation for
+  // combining two independent blur sources), then (when normalized) scaled to what
   // it would look like enlarged to a common full-frame-sized output — multiplying by
   // crop factor is what makes a smaller sensor's blur "count more" once enlarged more.
   function effectiveCoC(row, uMeters) {
     const raw = circleOfConfusion(uMeters, row.focalLength, row.aperture, row.focusDistance);
     if (raw === null) return null;
-    return displaySettings.normalize ? raw * cropFactor(row.sensor) : raw;
+    let combined = raw;
+    if (displaySettings.includeDiffraction) {
+      const d = diffractionCoC(row.aperture);
+      combined = Math.sqrt(raw * raw + d * d);
+    }
+    return displaySettings.normalize ? combined * cropFactor(row.sensor) : combined;
   }
   // Near/far distances where CoC crosses the acceptable threshold — the classic
   // hyperfocal depth-of-field limits. Uses the raw (non-normalized) threshold: the
   // "normalize" display option scales CoC by a constant per-row factor, which cancels
   // out of where the curve crosses its own threshold, so the boundary distances are
   // the same either way. far is Infinity once focused beyond the hyperfocal distance.
+  // When diffraction is included, the defocus budget left for the threshold shrinks
+  // (RSS-subtracted: sqrt(C² − d²)) — and if diffraction alone already exceeds the
+  // threshold, no distance is ever "in focus" by that criterion, so this returns null.
   function dofLimits(row) {
     const f = row.focalLength / 1000; // m
     const N = row.aperture;
     const s = row.focusDistance;
     if (s <= f) return null;
-    const C = acceptableCoC(row.sensor) / 1000; // mm -> m
+    let C = acceptableCoC(row.sensor) / 1000; // mm -> m
+    if (displaySettings.includeDiffraction) {
+      const d = diffractionCoC(N) / 1000; // mm -> m
+      if (d >= C) return null;
+      C = Math.sqrt(C * C - d * d);
+    }
     const H = (f * f) / (N * C) + f;
     const near = Math.max(0, (s * (H - f)) / (H + s - 2 * f));
     const far = s < H ? (s * (H - f)) / (H - s) : Infinity;
@@ -643,7 +686,7 @@
 
   // ---------- display settings (persisted) ----------
   const SETTINGS_KEY = "dof-explorer-display-settings";
-  let displaySettings = { minDistance: null, maxDistance: null, maxCoC: null, yScale: "linear", normalize: true, showFocusRange: true };
+  let displaySettings = { minDistance: null, maxDistance: null, maxCoC: null, yScale: "linear", normalize: true, showFocusRange: true, includeDiffraction: false };
   (function loadSettings() {
     try {
       const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
@@ -654,6 +697,7 @@
         if (saved.yScale === "linear" || saved.yScale === "log") displaySettings.yScale = saved.yScale;
         if (typeof saved.normalize === "boolean") displaySettings.normalize = saved.normalize;
         if (typeof saved.showFocusRange === "boolean") displaySettings.showFocusRange = saved.showFocusRange;
+        if (typeof saved.includeDiffraction === "boolean") displaySettings.includeDiffraction = saved.includeDiffraction;
       }
     } catch (e) { /* ignore malformed/unavailable storage */ }
   })();
@@ -974,7 +1018,8 @@
     ctx.translate(14, (plotTop + height - PAD.bottom) / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = "center";
-    const yTitle = "Circle of confusion" + (displaySettings.normalize ? " (35mm-equivalent)" : " (mm)") + (isLog ? " — log scale" : "");
+    const yTitle = "Circle of confusion" + (displaySettings.normalize ? " (35mm-equivalent)" : " (mm)") +
+      (displaySettings.includeDiffraction ? " + diffraction" : "") + (isLog ? " — log scale" : "");
     ctx.fillText(yTitle, 0, 0);
     ctx.restore();
 
@@ -1212,6 +1257,7 @@
   const maxCoCInput = document.getElementById("set-max-coc");
   const normalizeCheckbox = document.getElementById("set-normalize");
   const showRangeCheckbox = document.getElementById("set-show-range");
+  const diffractionCheckbox = document.getElementById("set-diffraction");
 
   function syncPopoverFromSettings() {
     minDistInput.value = displaySettings.minDistance === null ? "" : displaySettings.minDistance;
@@ -1220,6 +1266,7 @@
     maxCoCInput.value = displaySettings.maxCoC === null ? "" : displaySettings.maxCoC;
     normalizeCheckbox.checked = displaySettings.normalize;
     showRangeCheckbox.checked = displaySettings.showFocusRange;
+    diffractionCheckbox.checked = displaySettings.includeDiffraction;
   }
 
   function openPopover() {
@@ -1273,6 +1320,11 @@
   });
   showRangeCheckbox.addEventListener("change", () => {
     displaySettings.showFocusRange = showRangeCheckbox.checked;
+    saveSettings();
+    drawChart();
+  });
+  diffractionCheckbox.addEventListener("change", () => {
+    displaySettings.includeDiffraction = diffractionCheckbox.checked;
     saveSettings();
     drawChart();
   });
