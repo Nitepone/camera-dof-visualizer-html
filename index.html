@@ -98,7 +98,9 @@
     color: var(--text-secondary);
   }
   .focus-mode-toggle select { width: auto; font-size: 12px; padding: 4px 6px; }
-  .focus-mode-toggle input { width: 3.4em; font-size: 12px; padding: 4px 5px; }
+  /* #id beats the later `select, input[type="number"] { width: 100% }` rule below,
+     which otherwise wins the tie against an equal-specificity class selector here */
+  #subject-size-input { width: 2.8em; font-size: 12px; padding: 4px 5px; }
   .header-controls {
     display: flex;
     align-items: center;
@@ -718,7 +720,7 @@
       if (!r || !SENSORS[r.sensor]) return;
       const focalLength = Number(r.focalLength), aperture = Number(r.aperture), focusDistance = Number(r.focusDistance);
       if (![focalLength, aperture, focusDistance].every((v) => isFinite(v) && v > 0)) return;
-      const subjectPercent = isFinite(Number(r.subjectPercent)) && Number(r.subjectPercent) > 0 ? Number(r.subjectPercent) : 20;
+      const subjectPercent = isFinite(Number(r.subjectPercent)) && Number(r.subjectPercent) > 0 ? Math.max(1, Math.round(Number(r.subjectPercent))) : 20;
       const row = { id: nextId++, sensor: r.sensor, focalLength, aperture, focusDistance, subjectPercent };
       recomputeFocusDistance(row); // keep focusDistance consistent if the global mode is "subject"
       loaded.push(row);
@@ -805,7 +807,7 @@
     if (displaySettings.focusMode === "subject") {
       return `
         <div class="subject-inputs">
-          <input type="number" data-field="subjectPercent" value="${row.subjectPercent}" min="0.1" step="1" title="% of horizontal frame">
+          <input type="number" data-field="subjectPercent" value="${row.subjectPercent}" min="1" step="1" title="% of horizontal frame">
           <span class="pct-suffix">%</span>
           <span class="computed-distance" title="Computed focus distance">(${formatDistance(row.focusDistance)})</span>
         </div>
@@ -862,8 +864,12 @@
       recomputeFocusDistance(row); // FOV depends on sensor, which subject mode needs
       refreshDerivedCells(tr, row);
     } else {
-      const v = parseFloat(e.target.value);
+      let v = parseFloat(e.target.value);
       if (isNaN(v) || v <= 0) return;
+      if (field === "subjectPercent") {
+        v = Math.max(1, Math.round(v));
+        e.target.value = v; // snap the box itself to the whole number — no decimals
+      }
       row[field] = v;
 
       // focal length changes FOV; subjectPercent drives the distance directly
