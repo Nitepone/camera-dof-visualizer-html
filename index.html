@@ -88,7 +88,8 @@
     text-transform: none;
     letter-spacing: normal;
     cursor: pointer;
-    flex-basis: 100%; /* forces everything after it in .header-controls onto a new line */
+    flex-basis: 100%; /* last in DOM order — this wraps it alone onto a second line */
+    justify-content: flex-end;
   }
   .lock-toggle input { cursor: pointer; }
   .focus-mode-toggle {
@@ -108,6 +109,7 @@
   .header-controls {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 14px;
     flex-wrap: wrap;
   }
@@ -301,10 +303,6 @@
     <div class="section-header">
       <h2>Camera configurations</h2>
       <div class="header-controls">
-        <label class="lock-toggle">
-          <input type="checkbox" id="lock-focus">
-          Lock focus distance across rows
-        </label>
         <label class="focus-mode-toggle">
           Focus distance:
           <select id="focus-mode-select">
@@ -317,6 +315,10 @@
           <input type="number" id="subject-size-input" min="0.001" step="0.01">
         </label>
         <button type="button" class="share-btn" id="share-btn" title="Copy a link that reproduces these rows">🔗 Copy link</button>
+        <label class="lock-toggle">
+          <input type="checkbox" id="lock-focus">
+          Lock focus distance across rows
+        </label>
       </div>
     </div>
     <div class="table-wrap">
@@ -892,14 +894,25 @@
       }
       refreshDerivedCells(tr, row);
 
-      // focusDistance is only ever editable when the global mode is "distance", so
-      // every row it could propagate to is in the same mode — no per-row guard needed
-      if (field === "focusDistance" && lockFocusDistance) {
+      // "Lock focus distance across rows" locks whichever field actually drives the
+      // distance in the current global mode — focusDistance when typed directly,
+      // subjectPercent when derived. Both fields only ever exist in their matching
+      // mode, so every row here is guaranteed to be in the same mode — no per-row guard.
+      if (lockFocusDistance && (field === "focusDistance" || field === "subjectPercent")) {
         rows.forEach((other) => {
           if (other.id === row.id) return;
-          other.focusDistance = v;
           const otherTr = tbody.querySelector(`tr[data-id="${other.id}"]`);
-          if (otherTr) otherTr.querySelector('input[data-field="focusDistance"]').value = v.toFixed(2);
+          if (field === "focusDistance") {
+            other.focusDistance = v;
+            if (otherTr) otherTr.querySelector('input[data-field="focusDistance"]').value = v.toFixed(2);
+          } else {
+            other.subjectPercent = v;
+            recomputeFocusDistance(other);
+            if (otherTr) {
+              otherTr.querySelector('input[data-field="subjectPercent"]').value = v;
+              refreshDerivedCells(otherTr, other);
+            }
+          }
         });
       }
     }
@@ -943,15 +956,18 @@
   const lockCheckbox = document.getElementById("lock-focus");
   lockCheckbox.addEventListener("change", () => {
     lockFocusDistance = lockCheckbox.checked;
-    // syncing to rows[0]'s distance only makes sense when distances are typed
-    // directly — in subject mode every row's distance is already derived
-    if (lockFocusDistance && displaySettings.focusMode === "distance") {
+    if (!lockFocusDistance) return;
+    // sync every row to row[0]'s value in whichever field currently drives distance
+    if (displaySettings.focusMode === "distance") {
       const target = rows[0].focusDistance;
       rows.forEach((r) => { r.focusDistance = target; });
-      saveRows();
-      renderTable();
-      drawChart();
+    } else {
+      const target = rows[0].subjectPercent;
+      rows.forEach((r) => { r.subjectPercent = target; recomputeFocusDistance(r); });
     }
+    saveRows();
+    renderTable();
+    drawChart();
   });
 
   const focusModeSelect = document.getElementById("focus-mode-select");
