@@ -551,6 +551,15 @@
     }
     return ticks;
   }
+  function roundedRectPath(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
   function formatAxisNumber(t) {
     if (t === 0) return "0";
     const decimals = t < 0.01 ? 3 : t < 1 ? 2 : t < 10 ? 1 : 0;
@@ -923,6 +932,20 @@
       ctx.fillText(formatAxisNumber(t), PAD.left - 8, y);
     });
 
+    // vertical gridlines — same hairline style as the horizontal ones, one per x
+    // tick, running from the very top of the chart (through the focus-range strip,
+    // when it's shown) down to the x-axis
+    ctx.strokeStyle = gridline;
+    ctx.lineWidth = 1;
+    xTicks.forEach((t) => {
+      if (t < xMin || t > xMax) return;
+      const x = Math.round(xScale(t)) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x, PAD.top);
+      ctx.lineTo(x, height - PAD.bottom);
+      ctx.stroke();
+    });
+
     // x labels
     xTicks.forEach((t) => {
       if (t < xMin || t > xMax) return;
@@ -1093,6 +1116,14 @@
           ctx.fillText(label, nearX - 6, laneY);
         }
       });
+
+      // frame the whole section — heading and lanes together — in a rounded box
+      const boxTop = PAD.top - 4.5;
+      const boxBottom = lanesTop + curves.length * RANGE_LANE_H + (curves.length - 1) * RANGE_LANE_GAP + 5.5;
+      ctx.strokeStyle = cssVar("--border");
+      ctx.lineWidth = 1;
+      roundedRectPath(PAD.left + 0.5, boxTop, plotW - 1, boxBottom - boxTop, 6);
+      ctx.stroke();
     }
 
     lastLayout = { xMin, xMax, xScale, yScale, plotLeft: PAD.left, plotRight: width - PAD.right, plotTop, plotBottom: height - PAD.bottom };
