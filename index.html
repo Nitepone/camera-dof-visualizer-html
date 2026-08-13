@@ -133,15 +133,24 @@
     font-variant-numeric: tabular-nums;
   }
   #config-table th:nth-child(1) { width: 3%; }
-  #config-table th:nth-child(2) { width: 19%; }
+  #config-table th:nth-child(2) { width: 17%; }
   #config-table th:nth-child(3) { width: 11%; }
   #config-table th:nth-child(4) { width: 10%; }
-  #config-table th:nth-child(5) { width: 11%; }
+  #config-table th:nth-child(5) { width: 17%; }
   #config-table th:nth-child(6) { width: 8%; }
-  #config-table th:nth-child(7) { width: 14%; }
+  #config-table th:nth-child(7) { width: 12%; }
   #config-table th:nth-child(8) { width: 12%; }
-  #config-table th:nth-child(9) { width: 12%; }
+  #config-table th:nth-child(9) { width: 10%; }
   td.num { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .focus-cell { display: flex; flex-direction: column; gap: 4px; }
+  .subject-inputs { display: flex; gap: 4px; }
+  .subject-inputs input { flex: 1 1 0; min-width: 0; }
+  .computed-distance {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
   .actions { display: flex; gap: 6px; white-space: nowrap; }
   button {
     font: inherit;
@@ -420,6 +429,23 @@
       no distance registers as "in focus" by that criterion, so the near/far markers
       and focus-range lane disappear for rows stopped down that far.
     </p>
+    <p>
+      The <strong>focus distance</strong> column can also be set indirectly, by
+      subject size instead of distance. At distance <code>d</code>, the frame's
+      physical width is <code>2 &middot; d &middot; tan(HFOV/2)</code> (rectilinear
+      projection); setting a subject of width <code>W</code> to fill a given
+      percentage <code>p</code> of that frame width and solving for <code>d</code>
+      gives:
+    </p>
+    <pre>d = W / (2 &middot; (p/100) &middot; tan(HFOV/2))</pre>
+    <p>
+      using the row's own horizontal FOV. The distance recalculates automatically
+      whenever subject size, percentage, sensor, or focal length changes for that
+      row &mdash; the <strong>Subject %</strong> mode's distance field is read-only,
+      derived rather than typed. Rows in this mode don't participate in "lock focus
+      distance across rows," since their distance comes from the subject, not the
+      other way around.
+    </p>
   </details>
 </main>
 
@@ -460,6 +486,24 @@
   function fovDegrees(sensorKey, focalLengthMm) {
     const w = SENSORS[sensorKey].w;
     return 2 * Math.atan(w / (2 * focalLengthMm)) * (180 / Math.PI);
+  }
+
+  // For subject-size focus mode: the distance (m) at which a physical subject of
+  // width subjectSize (m) fills subjectPercent% of the horizontal frame. Rectilinear
+  // projection: frame width at distance d is 2*d*tan(HFOV/2); solve for d so that
+  // subjectSize equals that fraction of the frame width.
+  function distanceForSubjectSize(sensorKey, focalLengthMm, subjectSizeM, subjectPercent) {
+    const hfovRad = fovDegrees(sensorKey, focalLengthMm) * (Math.PI / 180);
+    const fraction = subjectPercent / 100;
+    return subjectSizeM / (2 * fraction * Math.tan(hfovRad / 2));
+  }
+  // Recomputes and writes row.focusDistance from its subject-size inputs. Only
+  // meaningful in "subject" focus mode; a no-op otherwise. Called whenever sensor,
+  // focal length, subject size, or subject percent change on a subject-mode row.
+  function recomputeFocusDistance(row) {
+    if (row.focusMode !== "subject") return;
+    const d = distanceForSubjectSize(row.sensor, row.focalLength, row.subjectSize, row.subjectPercent);
+    if (isFinite(d) && d > 0) row.focusDistance = d;
   }
 
   // ratio of full-frame diagonal to this sensor's diagonal; >1 for smaller sensors
@@ -612,6 +656,9 @@
       focalLength: 50,
       aperture: 2.8,
       focusDistance: 5,
+      focusMode: "distance",
+      subjectSize: 0.3,
+      subjectPercent: 20,
     }, overrides);
   }
   const DEFAULT_ROWS = [
@@ -627,12 +674,17 @@
   const ROWS_KEY = "dof-explorer-rows";
   function saveRows() {
     try {
-      const compact = rows.map((r) => ({ sensor: r.sensor, focalLength: r.focalLength, aperture: r.aperture, focusDistance: r.focusDistance }));
+      const compact = rows.map((r) => ({
+        sensor: r.sensor, focalLength: r.focalLength, aperture: r.aperture, focusDistance: r.focusDistance,
+        focusMode: r.focusMode, subjectSize: r.subjectSize, subjectPercent: r.subjectPercent,
+      }));
       localStorage.setItem(ROWS_KEY, JSON.stringify(compact));
     } catch (e) { /* storage unavailable */ }
   }
-  // turns plain {sensor, focalLength, aperture, focusDistance} objects (from storage
-  // or a decoded share link) into real rows with fresh ids, validating as it goes
+  // turns plain {sensor, focalLength, aperture, focusDistance, focusMode, subjectSize,
+  // subjectPercent} objects (from storage or a decoded share link) into real rows
+  // with fresh ids, validating as it goes. The subject-mode fields are optional —
+  // older saved rows / share links without them fall back to sensible defaults.
   function rowsFromPlain(list) {
     if (!Array.isArray(list) || list.length === 0) return null;
     const loaded = [];
@@ -640,7 +692,12 @@
       if (!r || !SENSORS[r.sensor]) return;
       const focalLength = Number(r.focalLength), aperture = Number(r.aperture), focusDistance = Number(r.focusDistance);
       if (![focalLength, aperture, focusDistance].every((v) => isFinite(v) && v > 0)) return;
-      loaded.push({ id: nextId++, sensor: r.sensor, focalLength, aperture, focusDistance });
+      const focusMode = r.focusMode === "subject" ? "subject" : "distance";
+      const subjectSize = isFinite(Number(r.subjectSize)) && Number(r.subjectSize) > 0 ? Number(r.subjectSize) : 0.3;
+      const subjectPercent = isFinite(Number(r.subjectPercent)) && Number(r.subjectPercent) > 0 ? Number(r.subjectPercent) : 20;
+      const row = { id: nextId++, sensor: r.sensor, focalLength, aperture, focusDistance, focusMode, subjectSize, subjectPercent };
+      recomputeFocusDistance(row); // keep focusDistance consistent if loaded as subject mode
+      loaded.push(row);
     });
     if (loaded.length === 0) return null;
     return loaded;
@@ -648,7 +705,7 @@
 
   // ---------- shareable URL encoding ----------
   function encodeRowsParam(list) {
-    const compact = list.map((r) => [r.sensor, r.focalLength, r.aperture, r.focusDistance]);
+    const compact = list.map((r) => [r.sensor, r.focalLength, r.aperture, r.focusDistance, r.focusMode, r.subjectSize, r.subjectPercent]);
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(compact))));
     return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   }
@@ -658,7 +715,10 @@
       while (b64.length % 4) b64 += "=";
       const compact = JSON.parse(decodeURIComponent(escape(atob(b64))));
       if (!Array.isArray(compact)) return null;
-      return compact.map(([sensor, focalLength, aperture, focusDistance]) => ({ sensor, focalLength, aperture, focusDistance }));
+      // older links only have the first 4 fields — the rest destructure to undefined,
+      // which rowsFromPlain() falls back from
+      return compact.map(([sensor, focalLength, aperture, focusDistance, focusMode, subjectSize, subjectPercent]) =>
+        ({ sensor, focalLength, aperture, focusDistance, focusMode, subjectSize, subjectPercent }));
     } catch (e) { return null; }
   }
 
@@ -708,6 +768,27 @@
   // ---------- table rendering ----------
   const tbody = document.getElementById("config-tbody");
 
+  // Focus-distance cell markup: a mode select, plus either a plain distance input or
+  // (in subject mode) subject-size + percent inputs and a read-only computed distance.
+  function focusCellHTML(row) {
+    const modeInput = row.focusMode === "subject"
+      ? `
+        <div class="subject-inputs">
+          <input type="number" data-field="subjectSize" value="${row.subjectSize}" min="0.001" step="0.01" title="Subject size (m)">
+          <input type="number" data-field="subjectPercent" value="${row.subjectPercent}" min="0.1" step="1" title="% of horizontal frame">
+        </div>
+        <div class="computed-distance" title="Computed focus distance">${formatDistance(row.focusDistance)}</div>
+      `
+      : `<input type="number" data-field="focusDistance" value="${row.focusDistance}" min="0.1" max="10000" step="0.1">`;
+    return `
+      <select data-field="focusMode">
+        <option value="distance" ${row.focusMode === "distance" ? "selected" : ""}>Distance</option>
+        <option value="subject" ${row.focusMode === "subject" ? "selected" : ""}>Subject %</option>
+      </select>
+      ${modeInput}
+    `;
+  }
+
   function renderTable() {
     tbody.innerHTML = "";
     rows.forEach((row, i) => {
@@ -723,7 +804,7 @@
         <td><select data-field="sensor" title="${SENSORS[row.sensor].dims}">${sensorOptions}</select></td>
         <td><input type="number" data-field="focalLength" value="${row.focalLength}" min="4" max="2000" step="1"></td>
         <td><input type="number" data-field="aperture" value="${row.aperture}" min="0.7" max="64" step="0.1"></td>
-        <td><input type="number" data-field="focusDistance" value="${row.focusDistance}" min="0.1" max="10000" step="0.1"></td>
+        <td class="focus-cell">${focusCellHTML(row)}</td>
         <td class="num fov-cell">${formatFov(fovDegrees(row.sensor, row.focalLength))}</td>
         <td class="num equiv-cell">${formatEquivalent(row)}</td>
         <td class="num coc-cell">${formatCoC(acceptableCoC(row.sensor))}</td>
@@ -740,6 +821,8 @@
     tr.querySelector(".fov-cell").textContent = formatFov(fovDegrees(row.sensor, row.focalLength));
     tr.querySelector(".equiv-cell").textContent = formatEquivalent(row);
     tr.querySelector(".coc-cell").textContent = formatCoC(acceptableCoC(row.sensor));
+    const computedDistance = tr.querySelector(".computed-distance");
+    if (computedDistance) computedDistance.textContent = formatDistance(row.focusDistance);
   }
 
   tbody.addEventListener("input", (e) => {
@@ -751,16 +834,31 @@
 
     if (field === "sensor") {
       row.sensor = e.target.value;
+      recomputeFocusDistance(row); // FOV depends on sensor, which subject mode needs
       refreshDerivedCells(tr, row);
+    } else if (field === "focusMode") {
+      row.focusMode = e.target.value === "subject" ? "subject" : "distance";
+      recomputeFocusDistance(row);
+      saveRows();
+      renderTable(); // cell markup differs by mode, unlike the fields below
+      drawChart();
+      return;
     } else {
       const v = parseFloat(e.target.value);
       if (isNaN(v) || v <= 0) return;
       row[field] = v;
+
+      // focal length changes FOV; subjectSize/subjectPercent drive the distance directly
+      if (field === "focalLength" || field === "subjectSize" || field === "subjectPercent") {
+        recomputeFocusDistance(row);
+      }
       refreshDerivedCells(tr, row);
 
       if (field === "focusDistance" && lockFocusDistance) {
         rows.forEach((other) => {
-          if (other.id === row.id) return;
+          // subject-mode rows derive their own distance — propagating here would
+          // just get overwritten by the next recompute, so leave them alone
+          if (other.id === row.id || other.focusMode === "subject") return;
           other.focusDistance = v;
           const otherTr = tbody.querySelector(`tr[data-id="${other.id}"]`);
           if (otherTr) otherTr.querySelector('input[data-field="focusDistance"]').value = v;
@@ -809,7 +907,7 @@
     lockFocusDistance = lockCheckbox.checked;
     if (lockFocusDistance) {
       const target = rows[0].focusDistance;
-      rows.forEach((r) => { r.focusDistance = target; });
+      rows.forEach((r) => { if (r.focusMode !== "subject") r.focusDistance = target; });
       saveRows();
       renderTable();
       drawChart();
