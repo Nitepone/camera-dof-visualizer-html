@@ -859,6 +859,7 @@
     const stripH = rangeStripHeight();
     const height = CHART_BASE_HEIGHT + stripH;
     const plotTop = PAD.top + stripH;
+    const rangeBoxTop = stripH > 0 ? PAD.top + RANGE_LABEL_H : PAD.top;
     resizeCanvas(height);
     const rect = wrap.getBoundingClientRect();
     const width = rect.width;
@@ -926,16 +927,23 @@
       ctx.fillText(formatAxisNumber(t), PAD.left - 8, y);
     });
 
-    // vertical gridlines — same hairline style as the horizontal ones, one per x
-    // tick, running from the very top of the chart (through the focus-range strip,
-    // when it's shown) down to the x-axis
+    // vertical gridlines — same hairline style as the horizontal ones: one at every
+    // labeled x tick, plus one more at the midpoint between each adjacent pair (so
+    // there's a line every half-step, not just at labeled points). They run from the
+    // top of the focus-range box down to the x-axis — stopping there rather than
+    // continuing up into the "Focus range" heading above it.
+    const xGridPositions = [];
+    xTicks.forEach((t, idx) => {
+      xGridPositions.push(t);
+      if (idx < xTicks.length - 1) xGridPositions.push((t + xTicks[idx + 1]) / 2);
+    });
     ctx.strokeStyle = gridline;
     ctx.lineWidth = 1;
-    xTicks.forEach((t) => {
+    xGridPositions.forEach((t) => {
       if (t < xMin || t > xMax) return;
       const x = Math.round(xScale(t)) + 0.5;
       ctx.beginPath();
-      ctx.moveTo(x, PAD.top);
+      ctx.moveTo(x, rangeBoxTop);
       ctx.lineTo(x, height - PAD.bottom);
       ctx.stroke();
     });
@@ -1043,8 +1051,7 @@
 
       const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
       const capH = RANGE_LANE_H * 0.85;
-      const boxTop = PAD.top + RANGE_LABEL_H;
-      const lanesTop = boxTop + RANGE_BOX_PAD_V;
+      const lanesTop = rangeBoxTop + RANGE_BOX_PAD_V;
       curves.forEach(({ row, i }, idx) => {
         const limits = dofLimits(row);
         if (!limits) return; // focus distance not achievable at this focal length — leave the lane blank
@@ -1118,7 +1125,7 @@
       const boxBottom = lanesTop + lanesH + RANGE_BOX_PAD_V;
       ctx.strokeStyle = cssVar("--border");
       ctx.lineWidth = 1;
-      ctx.strokeRect(PAD.left + 0.5, boxTop + 0.5, plotW - 1, boxBottom - boxTop - 1);
+      ctx.strokeRect(PAD.left + 0.5, rangeBoxTop + 0.5, plotW - 1, boxBottom - rangeBoxTop - 1);
     }
 
     lastLayout = { xMin, xMax, xScale, yScale, plotLeft: PAD.left, plotRight: width - PAD.right, plotTop, plotBottom: height - PAD.bottom };
