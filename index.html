@@ -98,7 +98,7 @@
     color: var(--text-secondary);
   }
   .focus-mode-toggle select { width: auto; font-size: 12px; padding: 4px 6px; }
-  .focus-mode-toggle input { width: 5.5em; font-size: 12px; padding: 4px 6px; }
+  .focus-mode-toggle input { width: 3.4em; font-size: 12px; padding: 4px 5px; }
   .header-controls {
     display: flex;
     align-items: center;
@@ -152,18 +152,13 @@
   #config-table th:nth-child(9) { width: 10%; }
   td.num { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .focus-cell { display: flex; flex-direction: column; gap: 4px; }
-  .subject-inputs { display: flex; align-items: center; gap: 4px; }
+  .subject-inputs { display: flex; align-items: center; gap: 3px; }
   .subject-inputs input { flex: 0 0 3.6em; width: 3.6em; min-width: 0; }
   .pct-suffix { color: var(--text-muted); font-size: 12px; }
   .computed-distance {
-    flex: 1 1 auto;
-    min-width: 0;
     font-size: 11px;
     color: var(--text-secondary);
-    text-align: right;
     font-variant-numeric: tabular-nums;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .actions { display: flex; gap: 6px; white-space: nowrap; }
@@ -812,7 +807,7 @@
         <div class="subject-inputs">
           <input type="number" data-field="subjectPercent" value="${row.subjectPercent}" min="0.1" step="1" title="% of horizontal frame">
           <span class="pct-suffix">%</span>
-          <span class="computed-distance" title="Computed focus distance">${formatDistance(row.focusDistance)}</span>
+          <span class="computed-distance" title="Computed focus distance">(${formatDistance(row.focusDistance)})</span>
         </div>
       `;
     }
@@ -852,7 +847,7 @@
     tr.querySelector(".equiv-cell").textContent = formatEquivalent(row);
     tr.querySelector(".coc-cell").textContent = formatCoC(acceptableCoC(row.sensor));
     const computedDistance = tr.querySelector(".computed-distance");
-    if (computedDistance) computedDistance.textContent = formatDistance(row.focusDistance);
+    if (computedDistance) computedDistance.textContent = `(${formatDistance(row.focusDistance)})`;
   }
 
   tbody.addEventListener("input", (e) => {
