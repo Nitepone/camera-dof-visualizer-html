@@ -799,15 +799,16 @@
   const CHART_BASE_HEIGHT = 420;
   const RANGE_LANE_H = 12;
   const RANGE_LANE_GAP = 6;
+  const RANGE_LABEL_H = 14; // space for the "Focus range" heading above the lanes
   const RANGE_STRIP_BOTTOM_GAP = 16; // blank space between the last lane and the CoC plot
   let lastLayout = null; // cached for pointer interaction
 
-  // Height (in CSS px) of the focus-range strip: one lane per row, stacked in table
-  // order, or 0 when the toggle is off / there are no rows — in which case layout is
-  // identical to before this feature existed.
+  // Height (in CSS px) of the focus-range strip: a heading plus one lane per row,
+  // stacked in table order, or 0 when the toggle is off / there are no rows — in
+  // which case layout is identical to before this feature existed.
   function rangeStripHeight() {
     if (!displaySettings.showFocusRange || rows.length === 0) return 0;
-    return rows.length * RANGE_LANE_H + (rows.length - 1) * RANGE_LANE_GAP + RANGE_STRIP_BOTTOM_GAP;
+    return RANGE_LABEL_H + rows.length * RANGE_LANE_H + (rows.length - 1) * RANGE_LANE_GAP + RANGE_STRIP_BOTTOM_GAP;
   }
 
   function cssVar(name) {
@@ -1019,12 +1020,17 @@
     if (stripH > 0) {
       ctx.font = "10px system-ui, -apple-system, sans-serif";
       ctx.fillStyle = textMuted;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText("Focus range", PAD.left, PAD.top + RANGE_LABEL_H - 4);
+
       const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
       const capH = RANGE_LANE_H * 0.85;
+      const lanesTop = PAD.top + RANGE_LABEL_H;
       curves.forEach(({ row, i }, idx) => {
         const limits = dofLimits(row);
         if (!limits) return; // focus distance not achievable at this focal length — leave the lane blank
-        const laneY = PAD.top + idx * (RANGE_LANE_H + RANGE_LANE_GAP) + RANGE_LANE_H / 2;
+        const laneY = lanesTop + idx * (RANGE_LANE_H + RANGE_LANE_GAP) + RANGE_LANE_H / 2;
         const color = seriesColor(i);
         const nearOnScreen = limits.near >= xMin && limits.near <= xMax;
         const farOnScreen = isFinite(limits.far) && limits.far <= xMax;
